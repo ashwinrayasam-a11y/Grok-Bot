@@ -3,6 +3,6 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
-*.json
-!package.json
 .gradio/
+vesper_save.json
+
