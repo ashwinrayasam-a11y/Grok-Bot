@@ -47,6 +47,4 @@ Open the local Gradio URL. Under **Model & keys** you can paste tokens without e
 - **What she calls you** + **Private notes** — relationship texture injected into the system prompt
 - **Export / Import** — save chat + emotional state as JSON
 
-## Safety
 
-Adult dark fiction and psychological intensity between consenting adults are in-scope. Content involving minors is refused. She will not help with real-world violent crime or self-harm methods.
