@@ -90,6 +90,46 @@ struct MacLink {
         }
         return try snakeDecoder().decode(MacChatResponse.self, from: data)
     }
+
+    /// Upload a recorded clip to the Mac's Whisper (POST /v1/stt) — verbatim,
+    /// uncensored transcription with the same stack the desktop uses.
+    func transcribe(fileURL: URL) async throws -> String {
+        let audio = try Data(contentsOf: fileURL)
+        let boundary = "vesper-\(UUID().uuidString)"
+
+        var request = URLRequest(url: baseURL.appending(path: "v1/stt"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"
+        )
+        var body = Data()
+        body.append("--\(boundary)\r\n")
+        body.append(
+            "Content-Disposition: form-data; name=\"audio\"; filename=\"\(fileURL.lastPathComponent)\"\r\n"
+        )
+        body.append("Content-Type: audio/wav\r\n\r\n")
+        body.append(audio)
+        body.append("\r\n--\(boundary)--\r\n")
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw VesperError.http(code, String(data: data, encoding: .utf8) ?? "")
+        }
+        struct STTResponse: Decodable {
+            let text: String
+        }
+        return try JSONDecoder().decode(STTResponse.self, from: data).text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private extension Data {
+    mutating func append(_ string: String) {
+        append(Data(string.utf8))
+    }
 }
 
 // MARK: - Away leg: xAI direct (Grok + Ara), key from Keychain

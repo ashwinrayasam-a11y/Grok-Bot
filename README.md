@@ -58,15 +58,17 @@ A SwiftUI app under `ios/Vesper` that talks to Vesper two ways:
 
 ```bash
 pip install -r requirements.txt
-ollama pull gemma3                       # local Gemma
+pip install mlx-whisper                  # voice input (Apple Silicon only)
+brew install ffmpeg                      # mlx-whisper uses it to load audio
+ollama pull HammerAI/gemma-4-31b-heretic # local model
 mkdir -p .vesper
 echo 'xai-...' > .vesper/xai.key         # her voice; .vesper/ is gitignored
 python -m companion.phone_api            # binds 0.0.0.0:7861 on your LAN
 ```
 
-This runs happily beside the Gradio app (`python app.py`) — different ports. Env knobs (all optional): `VESPER_PHONE_BACKEND` (`ollama` | `xai` | `hf` | `openai`), `VESPER_PHONE_MODEL`, `VESPER_OLLAMA_URL`, `VESPER_PHONE_HOST`, `VESPER_PHONE_PORT`, `VESPER_TTS_VOICE`.
+This runs happily beside the Gradio app (`python app.py`) — different ports. Env knobs (all optional): `VESPER_PHONE_BACKEND` (`ollama` | `xai` | `hf` | `openai`), `VESPER_PHONE_MODEL`, `VESPER_OLLAMA_URL`, `VESPER_PHONE_HOST`, `VESPER_PHONE_PORT`, `VESPER_TTS_VOICE`, `VESPER_STT_MODEL`.
 
-Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat` (message + history + state in → reply + evolved state + optional Ara audio out), `POST /v1/tts`.
+Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat` (message + history + state in → reply + evolved state + optional Ara audio out), `POST /v1/stt` (audio in → verbatim Whisper transcript out — no profanity filter), `POST /v1/tts`.
 
 ### Open on the iPhone
 
@@ -74,6 +76,8 @@ Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat` (message + histo
 2. In the app's settings, the Mac URL defaults to `http://Ashs-MacBook-Pro.local:7861` — find yours with `scutil --get LocalHostName` and tap **Knock** to test.
 3. Optionally paste an xAI key for Away mode. Grant microphone, speech, and local-network permissions when asked.
 
-The chip in the header shows which leg you're on: **Home · her Mac** (ember) or **Away · Grok** (rose). Hold the mic to talk — transcription happens on device — and her spoken replies play themselves the moment they land, like a voice note. Tap a voice bubble to hear it again from the start; there are no play/pause controls.
+The chip in the header shows which leg you're on: **Home · her Mac** (ember) or **Away · Grok** (rose). Her spoken replies play themselves the moment they land, like a voice note; tap a voice bubble to hear it again from the start — there are no play/pause controls.
+
+**Voice input** is a tap-toggle: tap the mic to start listening, tap again to stop and send. The phone records raw audio and transcribes it with Whisper — the Mac's `mlx-whisper` at home, or on-device [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) (`base.en`, one-time model download on first use) when away. Apple's speech recognizer is not used anywhere, so transcripts are verbatim — swear words and all.
 
 

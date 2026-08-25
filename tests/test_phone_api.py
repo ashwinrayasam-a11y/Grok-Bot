@@ -89,3 +89,31 @@ def test_chat_rejects_empty_message():
 def test_tts_without_key_is_503(monkeypatch):
     monkeypatch.setattr(phone_api, "_xai_key", lambda: None)
     assert client.post("/v1/tts", json={"text": "hello"}).status_code == 503
+
+
+def test_stt_transcribes_verbatim(monkeypatch):
+    # Whisper output passes through untouched — no censorship layer.
+    monkeypatch.setattr(
+        phone_api, "transcribe_file", lambda path, **kw: "well, fuck me sideways"
+    )
+    r = client.post(
+        "/v1/stt", files={"audio": ("clip.wav", b"RIFFfakewav", "audio/wav")}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"text": "well, fuck me sideways"}
+
+
+def test_stt_without_mlx_whisper_is_503(monkeypatch):
+    def boom(path, **kw):
+        raise RuntimeError("mlx-whisper is not installed")
+
+    monkeypatch.setattr(phone_api, "transcribe_file", boom)
+    r = client.post(
+        "/v1/stt", files={"audio": ("clip.wav", b"RIFFfakewav", "audio/wav")}
+    )
+    assert r.status_code == 503
+
+
+def test_stt_rejects_empty_upload():
+    r = client.post("/v1/stt", files={"audio": ("clip.wav", b"", "audio/wav")})
+    assert r.status_code == 400

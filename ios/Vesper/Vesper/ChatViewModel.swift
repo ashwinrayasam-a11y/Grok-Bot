@@ -8,6 +8,8 @@ final class ChatViewModel: ObservableObject {
     @Published var emotion = EmotionState()
     @Published var mode: LinkMode = .checking
     @Published var isThinking = false
+    @Published var isHearing = false
+    @Published var hearingStatus: String?
     @Published var banner: String? {
         didSet {
             bannerTask?.cancel()
@@ -90,6 +92,48 @@ final class ChatViewModel: ObservableObject {
             await deliver(text, history: history)
             isThinking = false
             persist()
+        }
+    }
+
+    /// A finished mic take: transcribe it (Mac Whisper at home, on-device
+    /// Whisper away — never Apple Speech), then send like typed text.
+    func heard(_ fileURL: URL) {
+        guard !isHearing else { return }
+        isHearing = true
+        hearingStatus = "hearing you…"
+        Task {
+            do {
+                let text = try await transcribe(fileURL)
+                isHearing = false
+                hearingStatus = nil
+                if text.isEmpty {
+                    banner = "She didn't catch anything — try again."
+                } else {
+                    send(text)
+                }
+            } catch {
+                isHearing = false
+                hearingStatus = nil
+                banner = "Couldn't transcribe — \(error.localizedDescription)"
+            }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
+    private func transcribe(_ fileURL: URL) async throws -> String {
+        if let link = MacLink(urlString: macURLString), await link.isAwake() {
+            mode = .home
+            do {
+                return try await link.transcribe(fileURL: fileURL)
+            } catch {
+                banner = "Mac whisper failed — using on-device. (\(error.localizedDescription))"
+            }
+        }
+        // Away (or Mac STT failed): on-device WhisperKit. Still no Apple Speech.
+        return try await LocalWhisper.shared.transcribe(fileURL) { [weak self] status in
+            Task { @MainActor [weak self] in
+                self?.hearingStatus = status
+            }
         }
     }
 

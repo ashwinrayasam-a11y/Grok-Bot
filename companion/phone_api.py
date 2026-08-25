@@ -21,16 +21,18 @@ import base64
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from .emotion import EmotionalState, update_from_message
 from .llm import DEFAULT_HF_MODEL, history_to_messages, stream_chat
 from .personality import BASE_PERSONA, COMPANION_NAME, build_system_prompt
+from .voice import stt_available, transcribe_file
 
 log = logging.getLogger("vesper.phone")
 
@@ -43,7 +45,7 @@ TTS_VOICE = os.environ.get("VESPER_TTS_VOICE", "ara")
 TTS_LANGUAGE = os.environ.get("VESPER_TTS_LANGUAGE", "en")
 
 _MODEL_DEFAULTS = {
-    "ollama": "gemma3",
+    "ollama": "HammerAI/gemma-4-31b-heretic",
     "xai": "grok-4",
     "hf": DEFAULT_HF_MODEL,
     "openai": "gpt-4o-mini",
@@ -51,7 +53,9 @@ _MODEL_DEFAULTS = {
 
 
 def _model() -> str:
-    return os.environ.get("VESPER_PHONE_MODEL") or _MODEL_DEFAULTS.get(BACKEND, "gemma3")
+    return os.environ.get("VESPER_PHONE_MODEL") or _MODEL_DEFAULTS.get(
+        BACKEND, _MODEL_DEFAULTS["ollama"]
+    )
 
 
 def _xai_key() -> str | None:
@@ -167,6 +171,7 @@ def health() -> dict[str, Any]:
         "model": kwargs["model"],
         "tts": bool(_xai_key()),
         "voice": TTS_VOICE,
+        "stt": stt_available(),
     }
 
 
@@ -228,6 +233,27 @@ def chat(req: ChatRequest) -> ChatResponse:
         backend=kwargs["backend"],
         model=kwargs["model"],
     )
+
+
+@app.post("/v1/stt")
+def stt(audio: UploadFile = File(...)) -> dict[str, str]:
+    """Whisper on the Mac — verbatim transcription, no profanity filter."""
+    data = audio.file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty audio upload")
+    suffix = Path(audio.filename or "clip.wav").suffix or ".wav"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(data)
+        tmp.close()
+        text = transcribe_file(tmp.name)
+    except RuntimeError as e:  # mlx-whisper not installed on this Mac
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}")
+    finally:
+        os.unlink(tmp.name)
+    return {"text": text}
 
 
 @app.post("/v1/tts")

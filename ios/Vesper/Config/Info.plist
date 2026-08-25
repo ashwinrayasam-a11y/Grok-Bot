@@ -14,9 +14,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Vesper reaches her home on your Mac over your Wi-Fi.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Hold to talk — Vesper listens while you press.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Your held-down words are transcribed on device before they reach Vesper.</string>
+	<string>Tap the mic — Vesper listens until you tap again.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

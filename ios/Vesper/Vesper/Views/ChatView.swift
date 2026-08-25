@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatView: View {
     @EnvironmentObject private var model: ChatViewModel
-    @StateObject private var recorder = SpeechRecorder()
+    @StateObject private var recorder = AudioRecorder()
     @State private var draft = ""
     @State private var showSettings = false
     @State private var showMood = false
@@ -20,10 +20,16 @@ struct ChatView: View {
                     listeningBar
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                if model.isHearing {
+                    hearingBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 Composer(
                     draft: $draft,
                     recorder: recorder,
+                    busy: model.isHearing,
                     onSend: sendDraft,
+                    onTalkStart: startListening,
                     onTalkEnd: sendSpoken
                 )
             }
@@ -36,6 +42,7 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: model.banner)
         .animation(.easeInOut(duration: 0.2), value: recorder.isRecording)
+        .animation(.easeInOut(duration: 0.2), value: model.isHearing)
         // Sheets are a new presentation tree — inject the model explicitly or
         // their @EnvironmentObject lookup fatal-errors at presentation time.
         .sheet(isPresented: $showSettings) {
@@ -144,11 +151,22 @@ struct ChatView: View {
             Image(systemName: "waveform")
                 .symbolEffect(.variableColor.iterative, options: .repeating)
                 .foregroundStyle(VesperTheme.ember)
-            Text(recorder.transcript.isEmpty ? "listening…" : recorder.transcript)
+            Text("listening… tap ■ to send")
                 .font(.callout)
                 .foregroundStyle(VesperTheme.ink)
-                .lineLimit(2)
+            MicLevelBars(level: recorder.level)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                recorder.cancel()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(VesperTheme.mute)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(VesperTheme.bg.opacity(0.6)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel recording")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -164,6 +182,30 @@ struct ChatView: View {
         .padding(.bottom, 4)
     }
 
+    private var hearingBar: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .tint(VesperTheme.ember)
+            Text(model.hearingStatus ?? "hearing you…")
+                .font(.callout)
+                .foregroundStyle(VesperTheme.ink)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(VesperTheme.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(VesperTheme.line, lineWidth: 1)
+        )
+        .padding(.horizontal, 14)
+        .padding(.bottom, 4)
+    }
+
     // MARK: - Actions
 
     private func sendDraft() {
@@ -172,11 +214,34 @@ struct ChatView: View {
         model.send(text)
     }
 
+    private func startListening() {
+        model.voice.stop()
+        Task { await recorder.start() }
+    }
+
     private func sendSpoken() {
-        let text = recorder.finish()
-        if !text.isEmpty {
-            model.send(text)
+        if let url = recorder.stop() {
+            model.heard(url)
         }
+    }
+}
+
+/// Live microphone level while she listens.
+struct MicLevelBars: View {
+    var level: Double
+
+    private let boost: [Double] = [0.55, 0.85, 1.0, 0.7, 0.45]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<5, id: \.self) { index in
+                Capsule()
+                    .fill(VesperTheme.ember.opacity(0.85))
+                    .frame(width: 3, height: 5 + CGFloat(level * boost[index]) * 15)
+            }
+        }
+        .frame(height: 22)
+        .animation(.easeOut(duration: 0.1), value: level)
     }
 }
 

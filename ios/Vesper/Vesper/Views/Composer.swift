@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// Compact composer: multiline field, hold-to-talk mic, send.
+/// Compact composer: multiline field, tap-on/tap-off mic, send.
 struct Composer: View {
     @Binding var draft: String
-    @ObservedObject var recorder: SpeechRecorder
+    @ObservedObject var recorder: AudioRecorder
+    /// True while a finished take is being transcribed — mic pauses until done.
+    var busy: Bool
     var onSend: () -> Void
+    var onTalkStart: () -> Void
     var onTalkEnd: () -> Void
 
     private var canSend: Bool {
@@ -42,38 +45,35 @@ struct Composer: View {
         .padding(.bottom, 10)
     }
 
+    /// Tap to start listening, tap again to stop and send the transcript.
     private var talkButton: some View {
-        Image(systemName: "mic.fill")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(recorder.isRecording ? VesperTheme.bg : VesperTheme.mute)
-            .frame(width: 42, height: 42)
-            .background(
-                Circle().fill(recorder.isRecording ? VesperTheme.ember : VesperTheme.panel)
-            )
-            .overlay(
-                Circle().stroke(
-                    recorder.isRecording ? VesperTheme.ember : VesperTheme.line,
-                    lineWidth: 1
+        Button {
+            if recorder.isRecording {
+                onTalkEnd()
+            } else {
+                onTalkStart()
+            }
+        } label: {
+            Image(systemName: recorder.isRecording ? "stop.fill" : "mic.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(recorder.isRecording ? VesperTheme.bg : VesperTheme.mute)
+                .frame(width: 42, height: 42)
+                .background(
+                    Circle().fill(recorder.isRecording ? VesperTheme.ember : VesperTheme.panel)
                 )
-            )
-            .scaleEffect(recorder.isRecording ? 1.12 : 1)
-            .animation(.spring(duration: 0.25), value: recorder.isRecording)
-            .onLongPressGesture(
-                minimumDuration: .infinity,
-                maximumDistance: 80,
-                perform: {},
-                onPressingChanged: { pressing in
-                    if pressing {
-                        Task { await recorder.begin() }
-                    } else if recorder.isRecording {
-                        onTalkEnd()
-                    } else {
-                        recorder.abortPress()
-                    }
-                }
-            )
-            .accessibilityLabel("Hold to talk")
-
+                .overlay(
+                    Circle().stroke(
+                        recorder.isRecording ? VesperTheme.ember : VesperTheme.line,
+                        lineWidth: 1
+                    )
+                )
+                .scaleEffect(recorder.isRecording ? 1.12 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .opacity(busy ? 0.5 : 1)
+        .animation(.spring(duration: 0.25), value: recorder.isRecording)
+        .accessibilityLabel(recorder.isRecording ? "Stop and send" : "Tap to talk")
     }
 
     private var sendButton: some View {
