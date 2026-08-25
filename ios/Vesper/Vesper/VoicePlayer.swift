@@ -24,9 +24,18 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         try? session.setActive(true)
         guard let newPlayer = try? AVAudioPlayer(data: data) else { return }
         newPlayer.delegate = self
+        newPlayer.isMeteringEnabled = true  // drives her mouth while she speaks
         player = newPlayer
         newPlayer.play()
         playingID = id
+    }
+
+    /// Live speech level, 0…1 — polled by the avatar's render loop.
+    func meterLevel() -> Float {
+        guard let player, player.isPlaying else { return 0 }
+        player.updateMeters()
+        let decibels = player.averagePower(forChannel: 0)  // -160…0
+        return max(0, min(1, (decibels + 42) / 42))
     }
 
     func stop() {

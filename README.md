@@ -80,4 +80,6 @@ The chip in the header shows which leg you're on: **Home · her Mac** (ember) or
 
 **Voice input** is a tap-toggle: tap the mic to start listening, tap again to stop and send. The phone records raw audio and transcribes it with Whisper — the Mac's `mlx-whisper` at home, or on-device [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) (`base.en`, one-time model download on first use) when away. Apple's speech recognizer is not used anywhere, so transcripts are verbatim — swear words and all.
 
+**Her presence** — a RealityKit bust lives in the chat itself, between the header and the conversation. The geometry is parametric (generated in code, no external character assets) and textured with her locked portrait (`ios/Vesper/Vesper/Avatar/VesperFace.png` — regenerate it and re-measure `FaceMap` to change her face). Idle, she breathes, shifts her weight, blinks at irregular intervals, and glances away and back — every channel is a continuous blend of eased drifts and damped springs, so she never parks on a pose. When Ara speaks, the live audio meter drives her mouth while the rest of her stays loose. Her mood (the same `EmotionState`) continuously tints the key light ember→rose and biases lid droop, chin, and sway. Tap her to pull down from bust to décolleté framing; the chevron tucks her away.
+
 

@@ -15,6 +15,7 @@ struct ChatView: View {
                 Rectangle()
                     .fill(VesperTheme.line)
                     .frame(height: 1)
+                PresencePanel()
                 conversation
                 if recorder.isRecording {
                     listeningBar
