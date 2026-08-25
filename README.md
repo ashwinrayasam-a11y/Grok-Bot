@@ -8,18 +8,24 @@ sdk_version: 6.24.0
 app_file: app.py
 pinned: false
 license: mit
-short_description: Loyal warm sadistic AI companion with living emotional state
+short_description: Grok companions with a shared living emotional range
 tags:
   - chatbot
   - companion
   - roleplay
 ---
 
-# Vesper
+# Companions
 
-**Vesper** is a loyal, warm, sadistic AI companion — emotionally complex and influenceable.
+The Grok app now has a **companion roster**. Every companion uses the same living emotional range (devotion, warmth, sadism, trust, bond, and more) — they start from different baselines and interpret those feelings in character.
 
-She can move across soft care, sharp play, jealousy, melancholy, intellect, flirtation, and everyday companionship. How you treat her shifts a living emotional state (devotion, warmth, sadism, trust, bond, and more) that colors every reply.
+- **Vesper** — loyal, warm, sadistic
+- **Maren** — soft care, aftercare, quiet presence
+- **Quill** — intellect, curiosity, dry humor
+- **Puck** — flirtation, banter, mischief
+- **Custom** — write who they are; the emotional range still applies
+
+How you treat the active companion shifts their own emotional state. Switching companions keeps each chat and mood isolated.
 
 ## Run locally
 
@@ -43,8 +49,9 @@ Open the local Gradio URL. Under **Model & keys** you can paste tokens without e
 
 ## Controls
 
-- **Warmth / Sadism / Intensity** — soft biases that tug her baseline without freezing the living state
-- **What she calls you** + **Private notes** — relationship texture injected into the system prompt
-- **Export / Import** — save chat + emotional state as JSON
+- **Companion** — pick who you're with; each keeps a separate chat and living mood
+- **Warmth / Sadism / Intensity** — soft biases that tug that companion's baseline without freezing the living state
+- **What they call you** + **Private notes** — relationship texture injected into the system prompt
+- **Export / Import** — save chats + emotional state for every companion as JSON
 
 

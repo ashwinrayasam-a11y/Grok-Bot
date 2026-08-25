@@ -1,4 +1,4 @@
-"""Living emotional state that drifts with how the user treats Vesper."""
+"""Living emotional state that drifts with how the user treats a companion."""
 
 from __future__ import annotations
 
@@ -90,8 +90,13 @@ class EmotionalState:
         )
 
 
-def default_state() -> EmotionalState:
-    return EmotionalState().clamp()
+def default_state(**overrides: float) -> EmotionalState:
+    """Vesper-shaped defaults, with optional per-companion baseline overrides."""
+    state = EmotionalState()
+    for key, value in overrides.items():
+        if hasattr(state, key):
+            setattr(state, key, float(value))
+    return state.clamp()
 
 
 # Lightweight influence heuristics — not a full NLP stack; enough to feel alive.
