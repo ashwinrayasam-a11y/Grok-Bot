@@ -2,20 +2,19 @@ import Foundation
 import RealityKit
 import UIKit
 
-/// Vesper's parametric bust: entity hierarchy, materials, lights, camera.
-/// All geometry is generated in code and textured with the locked portrait —
-/// nothing here depends on external character assets.
+/// Vesper's stylized bust: original modeled geometry (no photo shells) with a
+/// simple transform rig — eyeballs, lids, brows, and lip halves each hang on
+/// their own pivot so the director can act with them continuously.
 final class AvatarRig {
     /// A hair layer that trails the head with its own lag and drift.
     struct HairPiece {
         let pivot: Entity
-        let follow: Double  // how much of the head's motion it inherits
-        let tau: Double     // spring lag — longer = heavier, softer
+        let follow: Double
+        let tau: Double
     }
 
-    /// A deformable face region: the pivot sits at the region's center on the
-    /// dome; the mesh renders the exact portrait pixels it covers.
-    struct FacePatch {
+    /// A feature on its own pivot, remembering its rest position.
+    struct RigHandle {
         let pivot: Entity
         let home: SIMD3<Float>
     }
@@ -28,16 +27,19 @@ final class AvatarRig {
     let torso = Entity()
     let neckPivot = Entity()   // head yaw / pitch / roll about the neck
     let head = Entity()
-    let jawPivot = Entity()    // chin drop while she speaks
-    let lidL: ModelEntity
-    let lidR: ModelEntity
+    let jawPivot = Entity()    // carries the lower lip while she speaks
+    let eyeL = Entity()        // gaze
+    let eyeR = Entity()
+    let lidL = Entity()        // blink / droop (rotation over the eyeball)
+    let lidR = Entity()
+    let browL: RigHandle
+    let browR: RigHandle
+    let lipUL = Entity()       // lip halves, pivoted at the mouth center —
+    let lipUR = Entity()       // corner lift/curl is a roll of each half
+    let lipLL = Entity()
+    let lipLR = Entity()
     let chest: ModelEntity     // silk, breathing
     let hairPieces: [HairPiece]
-    let browL: FacePatch
-    let browR: FacePatch
-    let cornerL: FacePatch
-    let cornerR: FacePatch
-    let sneer: FacePatch
     let keyLight = PointLight()
     let rimLight = PointLight()
     let camera = PerspectiveCamera()
@@ -46,28 +48,35 @@ final class AvatarRig {
     private static let rose = UIColor(red: 0.66, green: 0.30, blue: 0.30, alpha: 1)
 
     init() throws {
-        let faceTexture = try TextureResource.load(named: "VesperFace")
-        let lidTexture = try TextureResource.load(named: "VesperLid")
+        let irisTexture = try TextureResource.load(named: "VesperIris")
         let hairTexture = try TextureResource.load(named: "VesperHair")
 
+        // --- Materials (colors keyed to the locked reference) ---
         var skin = PhysicallyBasedMaterial()
-        skin.baseColor = .init(texture: .init(faceTexture))
-        skin.roughness = 0.62
+        skin.baseColor = .init(tint: UIColor(red: 0.94, green: 0.85, blue: 0.78, alpha: 1))
+        skin.roughness = 0.55
         skin.metallic = 0.0
-        skin.blending = .transparent(opacity: .init(texture: .init(faceTexture)))
-        skin.faceCulling = .none
 
-        var lidSkin = PhysicallyBasedMaterial()
-        lidSkin.baseColor = .init(texture: .init(lidTexture))
-        lidSkin.roughness = 0.6
-        lidSkin.metallic = 0.0
-        lidSkin.faceCulling = .none
+        var eye = PhysicallyBasedMaterial()
+        eye.baseColor = .init(texture: .init(irisTexture))
+        eye.roughness = 0.12
+        eye.metallic = 0.0
 
-        // Strand-striated texture with ragged tip alpha — this is what makes
-        // it read as hair instead of dark cards vanishing into the ink UI.
+        var makeup = PhysicallyBasedMaterial()  // liner, lashes, brows
+        makeup.baseColor = .init(tint: UIColor(red: 0.082, green: 0.059, blue: 0.043, alpha: 1))
+        makeup.roughness = 0.35
+        makeup.metallic = 0.0
+        makeup.faceCulling = .none
+
+        var lip = PhysicallyBasedMaterial()  // merlot matte
+        lip.baseColor = .init(tint: UIColor(red: 0.37, green: 0.12, blue: 0.19, alpha: 1))
+        lip.roughness = 0.38
+        lip.metallic = 0.0
+        lip.faceCulling = .none
+
         var hair = PhysicallyBasedMaterial()
         hair.baseColor = .init(texture: .init(hairTexture))
-        hair.roughness = 0.38
+        hair.roughness = 0.40
         hair.metallic = 0.0
         hair.blending = .transparent(opacity: .init(texture: .init(hairTexture)))
         hair.faceCulling = .none
@@ -77,111 +86,134 @@ final class AvatarRig {
         silk.roughness = 0.30
         silk.metallic = 0.0
         silk.sheen = .init(tint: UIColor(red: 0.75, green: 0.35, blue: 0.45, alpha: 1))
-        silk.faceCulling = .none
 
         let innerMouth = UnlitMaterial(color: UIColor(red: 0.11, green: 0.03, blue: 0.04, alpha: 1))
 
-        // --- Head content ---
-        let shells = try AvatarGeometry.faceShells()
-        let face = ModelEntity(mesh: shells.upper, materials: [skin])
-        let jaw = ModelEntity(mesh: shells.jaw, materials: [skin])
-        let mouth = ModelEntity(mesh: try AvatarGeometry.innerMouth(), materials: [innerMouth])
+        // --- Head & face ---
+        head.addChild(ModelEntity(mesh: try AvatarGeometry.headMesh(), materials: [skin]))
 
-        // Jaw hinge sits deep in the head at ear height; the child offset puts
-        // the mesh in pivot space so rotation swings the chin down and back.
-        let jawHinge = SIMD3<Float>(0, FaceMap.y(0.545), -0.005)
-        jaw.position = -jawHinge
-        jawPivot.position = jawHinge
-        jawPivot.addChild(jaw)
+        let eyeMesh = try AvatarGeometry.eyeball()
+        let lidRadius = Stylized.eyeRadius + 0.002
+        let lidMesh = try AvatarGeometry.eyeSector(
+            radius: lidRadius, polar: 0.32...1.06, azimuth: -1.15...1.15
+        )
+        let lashMesh = try AvatarGeometry.eyeSector(
+            radius: lidRadius + 0.0006, polar: 0.99...1.08, azimuth: -1.18...1.18
+        )
+        let lowerLidMesh = try AvatarGeometry.eyeSector(
+            radius: lidRadius, polar: 1.82...2.16, azimuth: -0.95...0.95
+        )
+        let lowerLinerMesh = try AvatarGeometry.eyeSector(
+            radius: lidRadius + 0.0004, polar: 1.78...1.86, azimuth: -1.0...1.0
+        )
 
-        let lidLeft = try AvatarGeometry.eyelid(centerU: FaceMap.eyeLU)
-        let lidRight = try AvatarGeometry.eyelid(centerU: FaceMap.eyeRU)
-        lidL = ModelEntity(mesh: lidLeft.mesh, materials: [lidSkin])
-        lidL.position = lidLeft.pivot
-        lidR = ModelEntity(mesh: lidRight.mesh, materials: [lidSkin])
-        lidR.position = lidRight.pivot
+        for side: Float in [-1, 1] {
+            let center = Stylized.eyeCenter(side: side)
 
-        // Crown rides the head rigidly; every hanging length gets a sway pivot
-        // at its root so the director can give it lagged follow-through.
-        let crown = ModelEntity(mesh: try AvatarGeometry.hairCrown(), materials: [hair])
+            let eyePivot = side < 0 ? eyeL : eyeR
+            eyePivot.position = center
+            eyePivot.addChild(ModelEntity(mesh: eyeMesh, materials: [eye]))
+            head.addChild(eyePivot)
+
+            let lidPivot = side < 0 ? lidL : lidR
+            lidPivot.position = center
+            lidPivot.addChild(ModelEntity(mesh: lidMesh, materials: [skin]))
+            lidPivot.addChild(ModelEntity(mesh: lashMesh, materials: [makeup]))
+            head.addChild(lidPivot)
+
+            let lowerLid = ModelEntity(mesh: lowerLidMesh, materials: [skin])
+            lowerLid.position = center
+            head.addChild(lowerLid)
+            let lowerLiner = ModelEntity(mesh: lowerLinerMesh, materials: [makeup])
+            lowerLiner.position = center
+            head.addChild(lowerLiner)
+
+            let wing = ModelEntity(mesh: try AvatarGeometry.linerWing(side: side), materials: [makeup])
+            wing.position = center
+            head.addChild(wing)
+        }
+
+        let browBuiltL = try AvatarGeometry.brow(side: -1)
+        let browBuiltR = try AvatarGeometry.brow(side: 1)
+        browL = Self.handle(mesh: browBuiltL.mesh, material: makeup, at: browBuiltL.pivot)
+        browR = Self.handle(mesh: browBuiltR.mesh, material: makeup, at: browBuiltR.pivot)
+        head.addChild(browL.pivot)
+        head.addChild(browR.pivot)
+
+        // Mouth: upper halves pivot at the mouth anchor; lower halves ride the
+        // jaw hinge and still roll about the anchor for corner acting.
+        let mouth = Stylized.mouthAnchor
+        let cavity = ModelEntity(mesh: try AvatarGeometry.innerMouth(), materials: [innerMouth])
+        cavity.position = mouth
+        head.addChild(cavity)
+
+        lipUL.position = mouth
+        lipUL.addChild(ModelEntity(mesh: try AvatarGeometry.lipHalf(side: -1, upper: true), materials: [lip]))
+        lipUR.position = mouth
+        lipUR.addChild(ModelEntity(mesh: try AvatarGeometry.lipHalf(side: 1, upper: true), materials: [lip]))
+        head.addChild(lipUL)
+        head.addChild(lipUR)
+
+        jawPivot.position = Stylized.jawHinge
+        lipLL.position = mouth - Stylized.jawHinge
+        lipLL.addChild(ModelEntity(mesh: try AvatarGeometry.lipHalf(side: -1, upper: false), materials: [lip]))
+        lipLR.position = mouth - Stylized.jawHinge
+        lipLR.addChild(ModelEntity(mesh: try AvatarGeometry.lipHalf(side: 1, upper: false), materials: [lip]))
+        jawPivot.addChild(lipLL)
+        jawPivot.addChild(lipLR)
+        head.addChild(jawPivot)
+
+        // --- Hair: scalp cap rides the head; lengths hang on sway pivots ---
+        head.addChild(ModelEntity(mesh: try AvatarGeometry.hairScalp(), materials: [hair]))
         let curtainL = Self.pivoted(
             try AvatarGeometry.hairCurtain(side: -1), material: hair,
-            at: SIMD3(-0.05, 0.15, 0.02)
+            at: SIMD3(-0.048, 0.075, 0.008)
         )
         let curtainR = Self.pivoted(
             try AvatarGeometry.hairCurtain(side: 1), material: hair,
-            at: SIMD3(0.05, 0.15, 0.02)
+            at: SIMD3(0.048, 0.075, 0.008)
         )
-
-        // Expression patches — exact portrait crops on the same dome.
-        browL = try Self.makePatch(
-            rect: AvatarGeometry.browLRect, proud: 0.0012, textureNamed: "VesperBrowL"
-        )
-        browR = try Self.makePatch(
-            rect: AvatarGeometry.browRRect, proud: 0.0012, textureNamed: "VesperBrowR"
-        )
-        cornerL = try Self.makePatch(
-            rect: AvatarGeometry.cornerLRect, proud: 0.0014, textureNamed: "VesperMouthL"
-        )
-        cornerR = try Self.makePatch(
-            rect: AvatarGeometry.cornerRRect, proud: 0.0014, textureNamed: "VesperMouthR"
-        )
-        sneer = try Self.makePatch(
-            rect: AvatarGeometry.sneerRect, proud: 0.0010, textureNamed: "VesperSneer"
-        )
-
-        head.addChild(face)
-        head.addChild(mouth)
-        head.addChild(jawPivot)
-        head.addChild(lidL)
-        head.addChild(lidR)
-        head.addChild(crown)
         head.addChild(curtainL)
         head.addChild(curtainR)
-        head.addChild(browL.pivot)
-        head.addChild(browR.pivot)
-        head.addChild(cornerL.pivot)
-        head.addChild(cornerR.pivot)
-        head.addChild(sneer.pivot)
 
-        // Neck pivot trick: pivot at the neck, content offset back, so head
-        // rotations happen about the neck rather than the shell center.
-        let neck = SIMD3<Float>(0, FaceMap.y(0.60), -0.01)
-        neckPivot.position = neck
-        head.position = -neck
+        // Head content sits above the neck joint.
+        let neckJoint = SIMD3<Float>(0, -0.045, -0.008)
+        neckPivot.position = neckJoint
+        head.position = SIMD3(0, 0.055, 0) - neckJoint
         neckPivot.addChild(head)
 
-        // --- Torso content ---
-        let silkParts = try AvatarGeometry.silkChest()
-        chest = ModelEntity(mesh: silkParts.mesh, materials: [silk])
-        chest.position = silkParts.center
+        // --- Torso ---
+        let neck = ModelEntity(mesh: try AvatarGeometry.neck(), materials: [skin])
+        let chestBuilt = try AvatarGeometry.chestSkin()
+        let decollete = ModelEntity(mesh: chestBuilt.mesh, materials: [skin])
+        decollete.position = chestBuilt.center
+        let silkBuilt = try AvatarGeometry.silkChest()
+        chest = ModelEntity(mesh: silkBuilt.mesh, materials: [silk])
+        chest.position = silkBuilt.center
 
-        // Lengths that rest toward the shoulders live on the torso so they
-        // trail head turns instead of riding them rigidly.
         let fallL = Self.pivoted(
-            try AvatarGeometry.hairFall(side: -1), material: hair,
-            at: SIMD3(-0.085, 0.16, -0.03)
+            try AvatarGeometry.hairFall(side: -1), material: hair, at: SIMD3(-0.08, 0.10, -0.03)
         )
         let fallR = Self.pivoted(
-            try AvatarGeometry.hairFall(side: 1), material: hair,
-            at: SIMD3(0.085, 0.16, -0.03)
+            try AvatarGeometry.hairFall(side: 1), material: hair, at: SIMD3(0.08, 0.10, -0.03)
         )
         let back = Self.pivoted(
-            try AvatarGeometry.hairBack(), material: hair,
-            at: SIMD3(0, 0.165, -0.05)
+            try AvatarGeometry.hairBack(), material: hair, at: SIMD3(0, 0.12, -0.06)
         )
 
         hairPieces = [
-            HairPiece(pivot: curtainL, follow: 0.55, tau: 0.50),
-            HairPiece(pivot: curtainR, follow: 0.60, tau: 0.55),
-            HairPiece(pivot: fallL, follow: 0.40, tau: 0.72),
-            HairPiece(pivot: fallR, follow: 0.45, tau: 0.78),
-            HairPiece(pivot: back, follow: 0.30, tau: 0.95),
+            HairPiece(pivot: curtainL, follow: 0.40, tau: 0.50),
+            HairPiece(pivot: curtainR, follow: 0.45, tau: 0.55),
+            HairPiece(pivot: fallL, follow: 0.30, tau: 0.72),
+            HairPiece(pivot: fallR, follow: 0.35, tau: 0.78),
+            HairPiece(pivot: back, follow: 0.25, tau: 0.95),
         ]
 
         torso.addChild(back)
         torso.addChild(fallL)
         torso.addChild(fallR)
+        torso.addChild(neck)
+        torso.addChild(decollete)
         torso.addChild(chest)
         torso.addChild(neckPivot)
         root.addChild(torso)
@@ -199,11 +231,11 @@ final class AvatarRig {
 
         let fill = DirectionalLight()
         fill.light.color = UIColor(red: 0.55, green: 0.57, blue: 0.66, alpha: 1)
-        fill.light.intensity = 400
+        fill.light.intensity = 450
         fill.look(at: [0, 0, 0], from: [0.1, 0.3, 1], relativeTo: nil)
 
-        camera.camera.fieldOfViewInDegrees = 22
-        camera.position = [0, 0.05, 0.46]
+        camera.camera.fieldOfViewInDegrees = 23
+        camera.position = [0, 0.06, 0.44]
 
         stage.addChild(root)
         stage.addChild(keyLight)
@@ -220,8 +252,17 @@ final class AvatarRig {
         rimLight.light.intensity = Float(6000 + chill * 7000)
     }
 
-    /// Wrap a mesh (built in body space) under a pivot entity so rotating the
-    /// pivot swings the piece about its root.
+    private static func handle(
+        mesh: MeshResource,
+        material: RealityKit.Material,
+        at pivot: SIMD3<Float>
+    ) -> RigHandle {
+        let entity = Entity()
+        entity.position = pivot
+        entity.addChild(ModelEntity(mesh: mesh, materials: [material]))
+        return RigHandle(pivot: entity, home: pivot)
+    }
+
     private static func pivoted(
         _ mesh: MeshResource,
         material: RealityKit.Material,
@@ -233,29 +274,6 @@ final class AvatarRig {
         model.position = -pivot
         holder.addChild(model)
         return holder
-    }
-
-    /// An expression patch: portrait-crop texture on a dome-hugging shell,
-    /// pivoted at its own center. Invisible at rest by construction.
-    private static func makePatch(
-        rect: (Float, Float, Float, Float),
-        proud: Float,
-        textureNamed name: String
-    ) throws -> FacePatch {
-        let texture = try TextureResource.load(named: name)
-        var material = PhysicallyBasedMaterial()
-        material.baseColor = .init(texture: .init(texture))
-        material.roughness = 0.62
-        material.metallic = 0.0
-        material.blending = .transparent(opacity: .init(texture: .init(texture)))
-        material.faceCulling = .none
-
-        let built = try AvatarGeometry.facePatch(rect: rect, proud: proud)
-        let pivot = Entity()
-        pivot.position = built.pivot
-        let model = ModelEntity(mesh: built.mesh, materials: [material])
-        pivot.addChild(model)  // mesh is already relative to the pivot
-        return FacePatch(pivot: pivot, home: built.pivot)
     }
 
     private static func blend(_ a: UIColor, _ b: UIColor, _ t: Float) -> UIColor {

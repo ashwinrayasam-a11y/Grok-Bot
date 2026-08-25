@@ -95,10 +95,10 @@ final class AvatarDirector {
     private var breathFollow = Damped()
     private var chillS = Damped(0.35)
     private var glowS = Damped(0.55)
-    private var camY = Damped(0.05)
-    private var camZ = Damped(0.46)
+    private var camY = Damped(0.062)
+    private var camZ = Damped(0.44)
     private var camFov = Damped(22)
-    private var focusY = Damped(0.045)
+    private var focusY = Damped(0.058)
 
     // Expression springs.
     private var browLS = Damped()
@@ -226,27 +226,23 @@ final class AvatarDirector {
         cornerLS.track(cornerBase + cornerSplit, dt: dt, tau: 0.5)
         cornerRS.track(cornerBase - cornerSplit, dt: dt, tau: 0.5)
 
-        applyPatch(rig.browL, lift: browLS.value * 0.0028, out: 0, roll: browLRollS.value * 0.07)
-        applyPatch(rig.browR, lift: browRS.value * 0.0028, out: 0, roll: browRRollS.value * 0.07)
-        applyPatch(
-            rig.cornerL,
-            lift: cornerLS.value * 0.0020,
-            out: -abs(cornerLS.value) * 0.0004,
-            roll: -cornerLS.value * 0.05
+        applyBrow(rig.browL, lift: browLS.value * 0.005, roll: browLRollS.value * 0.12)
+        applyBrow(rig.browR, lift: browRS.value * 0.005, roll: -browRRollS.value * 0.12)
+
+        // Lip halves pivot at the mouth center: rolling a half lifts or curls
+        // its corner (left corner up = negative roll, right = positive). The
+        // sneer rides the upper halves asymmetrically.
+        let sneerLift = sneerS.value
+        rig.lipUL.transform.rotation = simd_quatf(
+            angle: Float(-cornerLS.value * 0.16 - sneerLift * 0.07), axis: [0, 0, 1]
         )
-        applyPatch(
-            rig.cornerR,
-            lift: cornerRS.value * 0.0020,
-            out: abs(cornerRS.value) * 0.0004,
-            roll: cornerRS.value * 0.05
+        rig.lipUR.transform.rotation = simd_quatf(
+            angle: Float(cornerRS.value * 0.16), axis: [0, 0, 1]
         )
-        applyPatch(
-            rig.sneer,
-            lift: sneerS.value * 0.0016,
-            out: 0,
-            roll: 0,
-            stretch: sneerS.value * 0.05
-        )
+        rig.lipUL.transform.translation = Stylized.mouthAnchor + SIMD3(0, Float(sneerLift * 0.0013), 0)
+        rig.lipUR.transform.translation = Stylized.mouthAnchor + SIMD3(0, Float(sneerLift * 0.0008), 0)
+        rig.lipLL.transform.rotation = simd_quatf(angle: Float(-cornerLS.value * 0.12), axis: [0, 0, 1])
+        rig.lipLR.transform.rotation = simd_quatf(angle: Float(cornerRS.value * 0.12), axis: [0, 0, 1])
 
         // --- Hair: lagged follow-through behind the head, plus its own drift ---
         let headMotion = yawS.value * 0.5 + rollS.value * 0.9 + weightS.value * 5
@@ -283,19 +279,31 @@ final class AvatarDirector {
         let roll = simd_quatf(angle: Float(rollS.value), axis: [0, 0, 1])
         rig.neckPivot.transform.rotation = yaw * pitch * roll
 
-        rig.jawPivot.transform.rotation = simd_quatf(angle: Float(jawS.value), axis: [1, 0, 0])
+        // Stylized mouth reads best a touch wider than the raw meter.
+        rig.jawPivot.transform.rotation = simd_quatf(angle: Float(jawS.value * 1.5), axis: [1, 0, 0])
 
-        let lidScale = Float(max(0.02, lidS.value))
-        rig.lidL.transform.scale.y = lidScale
-        rig.lidR.transform.scale.y = lidScale
+        // Lids rotate over the modeled eyeballs: droop hoods them (that colder
+        // heavy-lidded look), blinks sweep them shut — registered by construction.
+        let lidAngle = Float(0.06 + 1.04 * min(1, max(0, lidS.value)))
+        rig.lidL.transform.rotation = simd_quatf(angle: lidAngle, axis: [1, 0, 0])
+        rig.lidR.transform.rotation = simd_quatf(angle: lidAngle, axis: [1, 0, 0])
+
+        // Eyes: gentle counter-rotation against the head (holding on you while
+        // the head wanders and tilts) plus a drift off-focus during glances.
+        let eyeYaw = max(-0.16, min(0.16, -yawS.value * 0.42 + glanceEnv * glance.direction * 0.06))
+        let eyePitch = max(-0.12, min(0.12, -pitchS.value * 0.4))
+        let eyeRotation = simd_quatf(angle: Float(eyeYaw), axis: [0, 1, 0])
+            * simd_quatf(angle: Float(eyePitch), axis: [1, 0, 0])
+        rig.eyeL.transform.rotation = eyeRotation
+        rig.eyeR.transform.rotation = eyeRotation
 
         rig.tintLights(chill: chillS.value, glow: glowS.value)
 
         // Camera framing (compact bust ↔ pulled-back décolleté), eased.
-        camY.track(frameTall ? -0.015 : 0.052, dt: dt, tau: 0.5)
-        camZ.track(frameTall ? 0.62 : 0.45, dt: dt, tau: 0.5)
-        camFov.track(frameTall ? 30 : 21, dt: dt, tau: 0.5)
-        focusY.track(frameTall ? -0.01 : 0.045, dt: dt, tau: 0.5)
+        camY.track(frameTall ? -0.02 : 0.062, dt: dt, tau: 0.5)
+        camZ.track(frameTall ? 0.60 : 0.44, dt: dt, tau: 0.5)
+        camFov.track(frameTall ? 32 : 22, dt: dt, tau: 0.5)
+        focusY.track(frameTall ? -0.02 : 0.058, dt: dt, tau: 0.5)
         rig.camera.camera.fieldOfViewInDegrees = Float(camFov.value)
         rig.camera.look(
             at: SIMD3(0, Float(focusY.value), 0.02),
@@ -304,18 +312,11 @@ final class AvatarDirector {
         )
     }
 
-    /// Small eased offsets on a portrait patch — living skin, not a mask swap.
-    private func applyPatch(
-        _ patch: AvatarRig.FacePatch,
-        lift: Double,
-        out: Double,
-        roll: Double,
-        stretch: Double = 0
-    ) {
+    /// Small eased offsets on a modeled brow — lift and arch, never a pose.
+    private func applyBrow(_ brow: AvatarRig.RigHandle, lift: Double, roll: Double) {
         var transform = Transform()
-        transform.translation = patch.home + SIMD3(Float(out), Float(lift), 0)
+        transform.translation = brow.home + SIMD3(0, Float(lift), 0)
         transform.rotation = simd_quatf(angle: Float(roll), axis: [0, 0, 1])
-        transform.scale = SIMD3(1, Float(1 + stretch), 1)
-        patch.pivot.transform = transform
+        brow.pivot.transform = transform
     }
 }
