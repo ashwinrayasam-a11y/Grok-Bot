@@ -10,7 +10,7 @@ struct MessageBubble: View {
                 Spacer(minLength: 48)
             }
             VStack(alignment: .leading, spacing: 8) {
-                if message.role == .assistant, message.audio != nil {
+                if message.role == .assistant, message.hasVoice {
                     VoiceBar(message: message)
                 }
                 Text(rendered)

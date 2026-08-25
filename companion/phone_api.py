@@ -18,15 +18,18 @@ read from XAI_API_KEY or .vesper/xai.key and never leaves the Mac.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import re
 import tempfile
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .emotion import EmotionalState, update_from_message
@@ -181,14 +184,13 @@ def persona() -> dict[str, str]:
     return {"name": COMPANION_NAME, "base_persona": BASE_PERSONA}
 
 
-@app.post("/v1/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
+    """Shared turn pipeline (same as app.py's respond()): blend intensity,
+    drift the living state from the message, build the system prompt."""
     message = (req.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is empty")
 
-    # Same turn pipeline as app.py's respond(): blend intensity, drift the
-    # living state from the message, then build the system prompt.
     state = EmotionalState.from_dict(req.state)
     state.intensity = max(0.0, min(1.0, 0.7 * state.intensity + 0.3 * req.intensity))
     state = update_from_message(
@@ -204,8 +206,12 @@ def chat(req: ChatRequest) -> ChatResponse:
         system += "\n\nBias this reply toward quieter, lower-intensity presence."
 
     history = [{"role": t.role, "content": t.content} for t in req.history]
-    messages = history_to_messages(history, system, message)
+    return state, history_to_messages(history, system, message)
 
+
+@app.post("/v1/chat", response_model=ChatResponse)
+def chat(req: ChatRequest) -> ChatResponse:
+    state, messages = _prepare(req)
     kwargs = _backend_kwargs()
     try:
         reply = "".join(
@@ -233,6 +239,105 @@ def chat(req: ChatRequest) -> ChatResponse:
         backend=kwargs["backend"],
         model=kwargs["model"],
     )
+
+
+# --- Streaming chat: tokens live, voice starting on the first sentence ---
+
+_SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*\s")
+_CLAUSE_END = re.compile(r"[,;:—]\s")
+
+
+def _split_speech(buffer: str, *, first: bool) -> tuple[str | None, str]:
+    """Cut a speakable segment off the front of the buffer.
+
+    The first clip cuts at the first sentence end (or a clause break once the
+    buffer runs long) so her voice starts almost immediately; later clips wait
+    for ~a paragraph's worth of complete sentences to keep TTS calls few.
+    """
+    ends = [m.end() for m in _SENTENCE_END.finditer(buffer)]
+    if ends and (first or ends[-1] >= 140):
+        cut = ends[0] if first else ends[-1]
+        return buffer[:cut], buffer[cut:]
+    if first and len(buffer) > 90:
+        clauses = [m.end() for m in _CLAUSE_END.finditer(buffer)]
+        if clauses:
+            cut = clauses[-1]
+            return buffer[:cut], buffer[cut:]
+    return None, buffer
+
+
+def _ndjson(obj: dict[str, Any]) -> str:
+    return json.dumps(obj, ensure_ascii=False) + "\n"
+
+
+@app.post("/v1/chat/stream")
+def chat_stream(req: ChatRequest) -> StreamingResponse:
+    """NDJSON stream: `state`, then `delta` tokens as they arrive, `audio`
+    clips as sentences finish synthesis (in order, without stalling tokens),
+    and finally `done` with the full reply."""
+    state, messages = _prepare(req)
+    kwargs = _backend_kwargs()
+
+    def generate() -> Iterator[str]:
+        yield _ndjson({"type": "state", "state": state.to_dict(), "mood": state.mood_label()})
+
+        # One worker keeps clips sequential; futures keep tokens unblocked.
+        tts = ThreadPoolExecutor(max_workers=1)
+        pending: list[tuple[int, str, Future]] = []
+        seq = 0
+
+        def dispatch(segment: str) -> None:
+            nonlocal seq
+            text = segment.strip()
+            if req.want_audio and text:
+                pending.append((seq, text, tts.submit(_synthesize, text)))
+                seq += 1
+
+        def drain(block: bool) -> Iterator[str]:
+            while pending and (block or pending[0][2].done()):
+                clip_seq, text, future = pending.pop(0)
+                try:
+                    audio = future.result(timeout=120)
+                except Exception as e:
+                    log.warning("TTS clip %d failed: %s", clip_seq, e)
+                    audio = None
+                if audio:
+                    yield _ndjson({
+                        "type": "audio",
+                        "seq": clip_seq,
+                        "audio_b64": base64.b64encode(audio[0]).decode("ascii"),
+                        "audio_mime": audio[1],
+                        "text": text,
+                    })
+
+        buffer = ""
+        full = ""
+        try:
+            for chunk in stream_chat(messages=messages, temperature=req.temperature, **kwargs):
+                if not chunk:
+                    continue
+                full += chunk
+                buffer += chunk
+                yield _ndjson({"type": "delta", "text": chunk})
+                segment, buffer = _split_speech(buffer, first=seq == 0)
+                if segment:
+                    dispatch(segment)
+                yield from drain(block=False)
+
+            dispatch(buffer)
+            yield from drain(block=True)
+
+            reply = full.strip()
+            if reply:
+                yield _ndjson({"type": "done", "reply": reply})
+            else:
+                yield _ndjson({"type": "error", "detail": "empty reply from the model"})
+        except Exception as e:
+            yield _ndjson({"type": "error", "detail": f"{type(e).__name__}: {e}"})
+        finally:
+            tts.shutdown(wait=False)
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @app.post("/v1/stt")

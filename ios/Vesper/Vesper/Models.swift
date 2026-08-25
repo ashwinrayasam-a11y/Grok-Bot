@@ -10,6 +10,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var role: Role
     var text: String
     var audio: Data?
+    /// Ordered voice clips — streamed replies speak sentence groups as they
+    /// finish synthesis, so one reply can carry several clips.
+    var audioClips: [Data]?
     var audioSeconds: Double?
     var date: Date
     var isError: Bool
@@ -25,9 +28,18 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.role = role
         self.text = text
         self.audio = audio
+        self.audioClips = audio.map { [$0] }
         self.audioSeconds = audioSeconds
         self.date = Date()
         self.isError = isError
+    }
+
+    var voiceClips: [Data] {
+        audioClips ?? audio.map { [$0] } ?? []
+    }
+
+    var hasVoice: Bool {
+        !voiceClips.isEmpty
     }
 }
 
@@ -96,10 +108,11 @@ enum SoulStore {
         // Keep the file light: cap history, keep voice data only for recent replies.
         snap.messages = Array(snap.messages.suffix(200))
         var voiced = 0
-        for index in snap.messages.indices.reversed() where snap.messages[index].audio != nil {
+        for index in snap.messages.indices.reversed() where snap.messages[index].hasVoice {
             voiced += 1
             if voiced > 12 {
                 snap.messages[index].audio = nil
+                snap.messages[index].audioClips = nil
             }
         }
         do {

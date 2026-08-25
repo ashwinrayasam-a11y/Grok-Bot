@@ -150,6 +150,14 @@ final class ChatViewModel: ObservableObject {
             do {
                 try await sendViaMac(link, text: text, history: history)
                 return
+            } catch VesperError.http(let code, _) where code == 404 {
+                // Older phone API without /v1/chat/stream — one-shot chat.
+                do {
+                    try await sendViaMacLegacy(link, text: text, history: history)
+                    return
+                } catch {
+                    banner = "Home leg failed — \(error.localizedDescription)"
+                }
             } catch {
                 banner = "Home leg failed — \(error.localizedDescription)"
             }
@@ -171,8 +179,76 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Streaming home leg: tokens append live, her voice starts on the first
+    /// sentence clip while the rest is still generating.
     private func sendViaMac(_ link: MacLink, text: String, history: [Turn]) async throws {
-        let payload = MacChatRequest(
+        let payload = macPayload(text: text, history: history)
+        var replyID: UUID?
+        var streamError: String?
+
+        try await link.chatStream(payload) { [weak self] event in
+            guard let self else { return }
+            switch event.type {
+            case "state":
+                if let state = event.state {
+                    self.emotion = state
+                }
+            case "delta":
+                guard let delta = event.text else { return }
+                if let id = replyID {
+                    self.mutateMessage(id) { $0.text += delta }
+                } else {
+                    let message = ChatMessage(role: .assistant, text: delta)
+                    replyID = message.id
+                    self.messages.append(message)
+                    self.isThinking = false  // words are landing; drop the dots
+                }
+            case "audio":
+                guard let id = replyID,
+                      let b64 = event.audioB64,
+                      let clip = Data(base64Encoded: b64)
+                else { return }
+                self.mutateMessage(id) { message in
+                    var clips = message.audioClips ?? []
+                    clips.append(clip)
+                    message.audioClips = clips
+                    message.audioSeconds =
+                        (message.audioSeconds ?? 0) + (VoicePlayer.duration(of: clip) ?? 0)
+                }
+                self.voice.enqueue(clip, for: id)
+            case "done":
+                if let id = replyID, let full = event.reply {
+                    self.mutateMessage(id) { $0.text = full }
+                }
+            case "error":
+                streamError = event.detail ?? "the stream broke"
+            default:
+                break
+            }
+        }
+
+        if replyID == nil {
+            // Nothing rendered — surface the failure so deliver() can fall back.
+            throw VesperError.http(502, streamError ?? "empty reply from the model")
+        }
+        if let streamError {
+            banner = "Her voice trailed off — \(streamError)"
+        }
+    }
+
+    /// Pre-streaming phone API (kept for older Macs): one-shot reply + clip.
+    private func sendViaMacLegacy(_ link: MacLink, text: String, history: [Turn]) async throws {
+        let response = try await link.chat(macPayload(text: text, history: history))
+        emotion = response.state
+        var audio: Data?
+        if let b64 = response.audioB64 {
+            audio = Data(base64Encoded: b64)
+        }
+        appendReply(response.reply, audio: audio)
+    }
+
+    private func macPayload(text: String, history: [Turn]) -> MacChatRequest {
+        MacChatRequest(
             message: text,
             history: history,
             state: emotion,
@@ -183,13 +259,13 @@ final class ChatViewModel: ObservableObject {
             intensity: intensityBias,
             wantAudio: true
         )
-        let response = try await link.chat(payload)
-        emotion = response.state
-        var audio: Data?
-        if let b64 = response.audioB64 {
-            audio = Data(base64Encoded: b64)
-        }
-        appendReply(response.reply, audio: audio)
+    }
+
+    private func mutateMessage(_ id: UUID, _ change: (inout ChatMessage) -> Void) {
+        guard let index = messages.lastIndex(where: { $0.id == id }) else { return }
+        var message = messages[index]
+        change(&message)
+        messages[index] = message
     }
 
     private func sendViaXAI(key: String, text: String, history: [Turn]) async throws {

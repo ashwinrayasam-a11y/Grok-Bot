@@ -1,33 +1,78 @@
 import AVFoundation
 import Foundation
 
-/// Plays her voice bubbles (MP3 data from Ara) and tracks which one is speaking.
+/// Plays her voice (MP3 clips from Ara) and tracks which message is speaking.
+/// Streamed replies arrive as several sentence clips: the first plays the
+/// moment it lands and later clips queue up behind it seamlessly. No transport
+/// controls anywhere — tap a bubble to replay from the start.
 final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var playingID: UUID?
 
     private var player: AVAudioPlayer?
+    private var queue: [Data] = []
 
     static func duration(of data: Data) -> Double? {
         (try? AVAudioPlayer(data: data))?.duration
     }
 
-    /// Tap = replay from the start. No transport controls, like a voice note.
+    /// Tap = replay the whole reply from the start.
     func replay(_ message: ChatMessage) {
-        guard let data = message.audio else { return }
-        play(data, id: message.id)
+        let clips = message.voiceClips
+        guard !clips.isEmpty else { return }
+        start(clips: clips, id: message.id)
     }
 
+    /// Single-clip playback (away mode, non-streamed replies).
     func play(_ data: Data, id: UUID) {
-        stop()
+        start(clips: [data], id: id)
+    }
+
+    /// Streaming: a new clip for a reply. Starts speaking immediately if this
+    /// message isn't already mid-voice; otherwise it queues in order.
+    func enqueue(_ data: Data, for id: UUID) {
+        if playingID == id {
+            queue.append(data)
+        } else {
+            start(clips: [data], id: id)
+        }
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+        queue = []
+        playingID = nil
+    }
+
+    private func start(clips: [Data], id: UUID) {
+        player?.stop()
+        player = nil
+        queue = Array(clips.dropFirst())
+        playingID = id
+        playData(clips[0])
+    }
+
+    private func playData(_ data: Data) {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio)
         try? session.setActive(true)
-        guard let newPlayer = try? AVAudioPlayer(data: data) else { return }
+        guard let newPlayer = try? AVAudioPlayer(data: data) else {
+            advance()
+            return
+        }
         newPlayer.delegate = self
         newPlayer.isMeteringEnabled = true  // drives her mouth while she speaks
         player = newPlayer
         newPlayer.play()
-        playingID = id
+    }
+
+    private func advance() {
+        player = nil
+        if queue.isEmpty {
+            playingID = nil
+        } else {
+            playData(queue.removeFirst())
+        }
     }
 
     /// Live speech level, 0…1 — polled by the avatar's render loop.
@@ -38,15 +83,9 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         return max(0, min(1, (decibels + 42) / 42))
     }
 
-    func stop() {
-        player?.stop()
-        player = nil
-        playingID = nil
-    }
-
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async { [weak self] in
-            self?.playingID = nil
+            self?.advance()
         }
     }
 }

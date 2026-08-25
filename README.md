@@ -68,7 +68,7 @@ python -m companion.phone_api            # binds 0.0.0.0:7861 on your LAN
 
 This runs happily beside the Gradio app (`python app.py`) — different ports. Env knobs (all optional): `VESPER_PHONE_BACKEND` (`ollama` | `xai` | `hf` | `openai`), `VESPER_PHONE_MODEL`, `VESPER_OLLAMA_URL`, `VESPER_PHONE_HOST`, `VESPER_PHONE_PORT`, `VESPER_TTS_VOICE`, `VESPER_STT_MODEL`.
 
-Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat` (message + history + state in → reply + evolved state + optional Ara audio out), `POST /v1/stt` (audio in → verbatim Whisper transcript out — no profanity filter), `POST /v1/tts`.
+Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat/stream` (NDJSON: evolved state, live token deltas, Ara voice clips as sentences finish — her first sentence is speaking while the rest still generates), `POST /v1/chat` (one-shot fallback), `POST /v1/stt` (audio in → verbatim Whisper transcript out — no profanity filter), `POST /v1/tts`.
 
 ### Open on the iPhone
 

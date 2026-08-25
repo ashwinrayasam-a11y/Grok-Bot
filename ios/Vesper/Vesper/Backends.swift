@@ -52,6 +52,19 @@ struct MacChatResponse: Decodable {
     var audioMime: String?
 }
 
+/// One NDJSON event from POST /v1/chat/stream.
+struct MacStreamEvent: Decodable {
+    var type: String
+    var text: String?
+    var state: EmotionState?
+    var mood: String?
+    var audioB64: String?
+    var audioMime: String?
+    var reply: String?
+    var detail: String?
+    var seq: Int?
+}
+
 struct MacLink {
     var baseURL: URL
 
@@ -89,6 +102,41 @@ struct MacLink {
             throw VesperError.http(code, String(data: data, encoding: .utf8) ?? "")
         }
         return try snakeDecoder().decode(MacChatResponse.self, from: data)
+    }
+
+    /// Streaming chat: tokens render live and her voice starts on the first
+    /// sentence. Events are delivered in order on the main actor.
+    func chatStream(
+        _ payload: MacChatRequest,
+        onEvent: @MainActor @escaping (MacStreamEvent) -> Void
+    ) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "v1/chat/stream"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120  // idle timeout between chunks
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try snakeEncoder().encode(payload)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw VesperError.emptyReply
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var body = ""
+            for try await line in bytes.lines {
+                body += line
+                if body.count > 500 { break }
+            }
+            throw VesperError.http(http.statusCode, body)
+        }
+
+        let decoder = snakeDecoder()
+        for try await line in bytes.lines {
+            guard !line.isEmpty,
+                  let data = line.data(using: .utf8),
+                  let event = try? decoder.decode(MacStreamEvent.self, from: data)
+            else { continue }
+            await onEvent(event)
+        }
     }
 
     /// Upload a recorded clip to the Mac's Whisper (POST /v1/stt) — verbatim,

@@ -1,6 +1,7 @@
 """Phone API checks with the LLM and TTS stubbed out."""
 
 import base64
+import json
 
 from fastapi.testclient import TestClient
 
@@ -116,4 +117,73 @@ def test_stt_without_mlx_whisper_is_503(monkeypatch):
 
 def test_stt_rejects_empty_upload():
     r = client.post("/v1/stt", files={"audio": ("clip.wav", b"", "audio/wav")})
+    assert r.status_code == 400
+
+
+def _stream_events(payload):
+    with client.stream("POST", "/v1/chat/stream", json=payload) as r:
+        assert r.status_code == 200
+        return [json.loads(line) for line in r.iter_lines() if line]
+
+
+def test_stream_tokens_then_done(monkeypatch):
+    chunks = ["One. ", "Two ", "three."]
+    monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(chunks))
+    monkeypatch.setattr(
+        phone_api, "_synthesize", lambda text: (f"[{text}]".encode(), "audio/mpeg")
+    )
+    events = _stream_events({"message": "hey"})
+
+    assert events[0]["type"] == "state"
+    assert "warmth" in events[0]["state"]
+
+    deltas = [e["text"] for e in events if e["type"] == "delta"]
+    assert deltas == chunks  # tokens pass through verbatim, in order
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["reply"] == "One. Two three."
+
+
+def test_stream_speaks_first_sentence_early(monkeypatch):
+    chunks = ["One. ", "Two ", "three."]
+    monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(chunks))
+    monkeypatch.setattr(
+        phone_api, "_synthesize", lambda text: (f"[{text}]".encode(), "audio/mpeg")
+    )
+    events = _stream_events({"message": "hey"})
+
+    audio = [e for e in events if e["type"] == "audio"]
+    assert len(audio) == 2
+    # First clip is just the first sentence — voice starts before the reply ends.
+    assert audio[0]["seq"] == 0
+    assert audio[0]["text"] == "One."
+    assert base64.b64decode(audio[0]["audio_b64"]) == b"[One.]"
+    # The remainder is spoken as a follow-up clip.
+    assert audio[1]["text"] == "Two three."
+    # The first clip must be scheduled before the final delta finishes.
+    types = [e["type"] for e in events]
+    assert types.index("audio") < types.index("done")
+
+
+def test_stream_without_voice_still_streams(monkeypatch):
+    monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(["mm."]))
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text: None)
+    events = _stream_events({"message": "hey"})
+    assert [e["type"] for e in events if e["type"] == "audio"] == []
+    assert events[-1]["type"] == "done"
+
+
+def test_stream_surfaces_model_errors(monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("ollama is down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(phone_api, "stream_chat", boom)
+    events = _stream_events({"message": "hey"})
+    assert events[-1]["type"] == "error"
+    assert "ollama is down" in events[-1]["detail"]
+
+
+def test_stream_rejects_empty_message():
+    r = client.post("/v1/chat/stream", json={"message": "  "})
     assert r.status_code == 400

@@ -137,6 +137,12 @@ struct ChatView: View {
                     }
                 }
             }
+            .onChange(of: model.messages.last?.text) {
+                // Follow her words as they stream in (no animation at token rate).
+                if let last = model.messages.last, last.role == .assistant {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
             .onChange(of: model.isThinking) {
                 if model.isThinking {
                     withAnimation(.easeOut(duration: 0.25)) {
