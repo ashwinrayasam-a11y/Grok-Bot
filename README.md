@@ -47,4 +47,33 @@ Open the local Gradio URL. Under **Model & keys** you can paste tokens without e
 - **What she calls you** + **Private notes** — relationship texture injected into the system prompt
 - **Export / Import** — save chat + emotional state as JSON
 
+## iPhone companion (hybrid)
+
+A SwiftUI app under `ios/Vesper` that talks to Vesper two ways:
+
+- **Home** — the phone talks to a small API on your Mac (`companion/phone_api.py`), which runs the same personality + emotional state as the Gradio app against local Gemma via Ollama, and speaks with Ara via the xAI TTS API. The xAI key stays on the Mac.
+- **Away** — if the Mac is unreachable, the app falls back to xAI Grok + Ara directly, using a key you paste into the app's settings (stored in the iOS Keychain, never in git). The same persona text and mood heuristics are mirrored on device, and the mood carries over between modes because the phone owns the state.
+
+### Run on the Mac
+
+```bash
+pip install -r requirements.txt
+ollama pull gemma3                       # local Gemma
+mkdir -p .vesper
+echo 'xai-...' > .vesper/xai.key         # her voice; .vesper/ is gitignored
+python -m companion.phone_api            # binds 0.0.0.0:7861 on your LAN
+```
+
+This runs happily beside the Gradio app (`python app.py`) — different ports. Env knobs (all optional): `VESPER_PHONE_BACKEND` (`ollama` | `xai` | `hf` | `openai`), `VESPER_PHONE_MODEL`, `VESPER_OLLAMA_URL`, `VESPER_PHONE_HOST`, `VESPER_PHONE_PORT`, `VESPER_TTS_VOICE`.
+
+Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat` (message + history + state in → reply + evolved state + optional Ara audio out), `POST /v1/tts`.
+
+### Open on the iPhone
+
+1. Open `ios/Vesper/Vesper.xcodeproj` in Xcode 16+, pick your signing team, run on your iPhone (same Wi-Fi as the Mac).
+2. In the app's settings, the Mac URL defaults to `http://Ashs-MacBook-Pro.local:7861` — find yours with `scutil --get LocalHostName` and tap **Knock** to test.
+3. Optionally paste an xAI key for Away mode. Grant microphone, speech, and local-network permissions when asked.
+
+The chip in the header shows which leg you're on: **Home · her Mac** (ember) or **Away · Grok** (rose). Hold the mic to talk — transcription happens on device — and her replies arrive as voice bubbles that autoplay.
+
 
