@@ -8,7 +8,14 @@ import Foundation
 final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var playingID: UUID?
 
-    private var player: AVAudioPlayer?
+    private var player: AVAudioPlayer? {
+        didSet { meterPlayer = player }
+    }
+    /// RealityKit's render callback reads the meter from a nonisolated
+    /// context. This weak mirror keeps that read Swift 6-legal: it is only
+    /// written alongside `player`, and AVAudioPlayer metering is safe to
+    /// poll from the render loop.
+    private nonisolated(unsafe) weak var meterPlayer: AVAudioPlayer?
     private var queue: [Data] = []
 
     static func duration(of data: Data) -> Double? {
@@ -76,11 +83,16 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     /// Live speech level, 0…1 — polled by the avatar's render loop.
-    func meterLevel() -> Float {
-        guard let player, player.isPlaying else { return 0 }
+    nonisolated func meterLevel() -> Float {
+        guard let player = meterPlayer, player.isPlaying else { return 0 }
         player.updateMeters()
         let decibels = player.averagePower(forChannel: 0)  // -160…0
         return max(0, min(1, (decibels + 42) / 42))
+    }
+
+    /// Whether she is audibly speaking right now — safe from the render loop.
+    nonisolated var isLive: Bool {
+        meterPlayer?.isPlaying ?? false
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {

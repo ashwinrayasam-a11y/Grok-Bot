@@ -39,6 +39,7 @@ struct AvatarSurface: UIViewRepresentable {
         private var rig: AvatarRig?
         private var updateSub: Cancellable?
 
+        @MainActor
         func attach(to view: ARView, model: ChatViewModel) {
             do {
                 let rig = try AvatarRig()
@@ -47,8 +48,11 @@ struct AvatarSurface: UIViewRepresentable {
                 view.scene.addAnchor(anchor)
 
                 let director = AvatarDirector(rig: rig)
-                director.audioLevel = { [weak model] in model?.voice.meterLevel() ?? 0 }
-                director.isSpeaking = { [weak model] in model?.voice.playingID != nil }
+                // Close over the (nonisolated) player, not the main-actor
+                // view model — the render loop polls these off-actor.
+                let voice = model.voice
+                director.audioLevel = { [weak voice] in voice?.meterLevel() ?? 0 }
+                director.isSpeaking = { [weak voice] in voice?.isLive ?? false }
                 director.setMood(from: model.emotion)
 
                 self.rig = rig
