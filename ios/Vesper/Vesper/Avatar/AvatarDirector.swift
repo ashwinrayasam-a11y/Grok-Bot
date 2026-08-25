@@ -282,20 +282,22 @@ final class AvatarDirector {
         // Stylized mouth reads best a touch wider than the raw meter.
         rig.jawPivot.transform.rotation = simd_quatf(angle: Float(jawS.value * 1.5), axis: [1, 0, 0])
 
-        // Lids rotate over the modeled eyeballs: droop hoods them (that colder
-        // heavy-lidded look), blinks sweep them shut — registered by construction.
-        let lidAngle = Float(0.06 + 1.04 * min(1, max(0, lidS.value)))
+        // Lids: the plate is built in its covering pose and hinged at the top;
+        // open = swung up-back, tucked behind the lash band. Droop leaves it
+        // partly down — the heavy-lidded coldness — and blinks bring it flush.
+        let lidValue = min(1, max(0, lidS.value))
+        let lidAngle = Float(1.25 * (1 - lidValue))
         rig.lidL.transform.rotation = simd_quatf(angle: lidAngle, axis: [1, 0, 0])
         rig.lidR.transform.rotation = simd_quatf(angle: lidAngle, axis: [1, 0, 0])
 
-        // Eyes: gentle counter-rotation against the head (holding on you while
-        // the head wanders and tilts) plus a drift off-focus during glances.
+        // Gaze: the iris discs translate inside the almonds (the 2D-anime eye
+        // mechanic) — gently countering the head so she holds on you while the
+        // head wanders, drifting off-focus during glances.
         let eyeYaw = max(-0.16, min(0.16, -yawS.value * 0.42 + glanceEnv * glance.direction * 0.06))
         let eyePitch = max(-0.12, min(0.12, -pitchS.value * 0.4))
-        let eyeRotation = simd_quatf(angle: Float(eyeYaw), axis: [0, 1, 0])
-            * simd_quatf(angle: Float(eyePitch), axis: [1, 0, 0])
-        rig.eyeL.transform.rotation = eyeRotation
-        rig.eyeR.transform.rotation = eyeRotation
+        let gazeOffset = SIMD3(Float(eyeYaw * 0.022), Float(eyePitch * 0.02), 0)
+        rig.irisL.transform.translation = AvatarRig.irisHome + gazeOffset
+        rig.irisR.transform.translation = AvatarRig.irisHome + gazeOffset
 
         rig.tintLights(chill: chillS.value, glow: glowS.value)
 

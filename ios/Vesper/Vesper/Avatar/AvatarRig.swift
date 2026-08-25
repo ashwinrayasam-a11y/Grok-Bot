@@ -2,18 +2,18 @@ import Foundation
 import RealityKit
 import UIKit
 
-/// Vesper's stylized bust: original modeled geometry (no photo shells) with a
-/// simple transform rig — eyeballs, lids, brows, and lip halves each hang on
-/// their own pivot so the director can act with them continuously.
+/// Vesper's stylized bust, v2: swept-profile skull with a real V-jaw, layered
+/// graphic eyes (almond sclera, translating iris discs with catch-lights,
+/// bold winged liner), filled merlot lips, and framing hair. Original design —
+/// colors keyed to the locked reference, no photo textures, no borrowed
+/// companions.
 final class AvatarRig {
-    /// A hair layer that trails the head with its own lag and drift.
     struct HairPiece {
         let pivot: Entity
         let follow: Double
         let tau: Double
     }
 
-    /// A feature on its own pivot, remembering its rest position.
     struct RigHandle {
         let pivot: Entity
         let home: SIMD3<Float>
@@ -23,26 +23,29 @@ final class AvatarRig {
     let stage = Entity()
 
     // Animation handles (the director writes these every frame).
-    let root = Entity()        // weight shift / lean
+    let root = Entity()
     let torso = Entity()
-    let neckPivot = Entity()   // head yaw / pitch / roll about the neck
+    let neckPivot = Entity()
     let head = Entity()
-    let jawPivot = Entity()    // carries the lower lip while she speaks
-    let eyeL = Entity()        // gaze
-    let eyeR = Entity()
-    let lidL = Entity()        // blink / droop (rotation over the eyeball)
+    let jawPivot = Entity()
+    let irisL = Entity()       // gaze = translating the iris in the almond
+    let irisR = Entity()
+    let lidL = Entity()        // blink = swinging the lid plate down flush
     let lidR = Entity()
     let browL: RigHandle
     let browR: RigHandle
-    let lipUL = Entity()       // lip halves, pivoted at the mouth center —
-    let lipUR = Entity()       // corner lift/curl is a roll of each half
+    let lipUL = Entity()
+    let lipUR = Entity()
     let lipLL = Entity()
     let lipLR = Entity()
-    let chest: ModelEntity     // silk, breathing
+    let chest: ModelEntity
     let hairPieces: [HairPiece]
     let keyLight = PointLight()
     let rimLight = PointLight()
     let camera = PerspectiveCamera()
+
+    /// Iris rest offset in eye-root space (proud of the sclera bulge).
+    static let irisHome = SIMD3<Float>(0, 0, 0.0045)
 
     private static let ember = UIColor(red: 0.77, green: 0.36, blue: 0.15, alpha: 1)
     private static let rose = UIColor(red: 0.66, green: 0.30, blue: 0.30, alpha: 1)
@@ -51,27 +54,44 @@ final class AvatarRig {
         let irisTexture = try TextureResource.load(named: "VesperIris")
         let hairTexture = try TextureResource.load(named: "VesperHair")
 
-        // --- Materials (colors keyed to the locked reference) ---
+        // --- Materials ---
         var skin = PhysicallyBasedMaterial()
         skin.baseColor = .init(tint: UIColor(red: 0.94, green: 0.85, blue: 0.78, alpha: 1))
         skin.roughness = 0.55
         skin.metallic = 0.0
 
-        var eye = PhysicallyBasedMaterial()
-        eye.baseColor = .init(texture: .init(irisTexture))
-        eye.roughness = 0.12
-        eye.metallic = 0.0
+        var sclera = PhysicallyBasedMaterial()
+        sclera.baseColor = .init(tint: UIColor(red: 0.95, green: 0.93, blue: 0.90, alpha: 1))
+        sclera.roughness = 0.25
+        sclera.metallic = 0.0
+        sclera.faceCulling = .none
+
+        var iris = PhysicallyBasedMaterial()
+        iris.baseColor = .init(texture: .init(irisTexture))
+        iris.roughness = 0.18
+        iris.metallic = 0.0
+        iris.blending = .transparent(opacity: .init(texture: .init(irisTexture)))
+        iris.faceCulling = .none
+
+        let glint = UnlitMaterial(color: UIColor(red: 0.98, green: 0.96, blue: 0.93, alpha: 1))
 
         var makeup = PhysicallyBasedMaterial()  // liner, lashes, brows
-        makeup.baseColor = .init(tint: UIColor(red: 0.082, green: 0.059, blue: 0.043, alpha: 1))
+        makeup.baseColor = .init(tint: UIColor(red: 0.075, green: 0.055, blue: 0.042, alpha: 1))
         makeup.roughness = 0.35
         makeup.metallic = 0.0
         makeup.faceCulling = .none
 
-        var lip = PhysicallyBasedMaterial()  // merlot matte
-        lip.baseColor = .init(tint: UIColor(red: 0.37, green: 0.12, blue: 0.19, alpha: 1))
-        lip.roughness = 0.38
+        var lidShadow = PhysicallyBasedMaterial()  // smoky eyeshadow tone
+        lidShadow.baseColor = .init(tint: UIColor(red: 0.55, green: 0.42, blue: 0.40, alpha: 1))
+        lidShadow.roughness = 0.5
+        lidShadow.metallic = 0.0
+        lidShadow.faceCulling = .none
+
+        var lip = PhysicallyBasedMaterial()
+        lip.baseColor = .init(tint: UIColor(red: 0.38, green: 0.12, blue: 0.19, alpha: 1))
+        lip.roughness = 0.33
         lip.metallic = 0.0
+        lip.sheen = .init(tint: UIColor(red: 0.55, green: 0.25, blue: 0.33, alpha: 1))
         lip.faceCulling = .none
 
         var hair = PhysicallyBasedMaterial()
@@ -87,52 +107,42 @@ final class AvatarRig {
         silk.metallic = 0.0
         silk.sheen = .init(tint: UIColor(red: 0.75, green: 0.35, blue: 0.45, alpha: 1))
 
-        let innerMouth = UnlitMaterial(color: UIColor(red: 0.11, green: 0.03, blue: 0.04, alpha: 1))
+        let cavityMaterial = UnlitMaterial(color: UIColor(red: 0.11, green: 0.03, blue: 0.04, alpha: 1))
 
-        // --- Head & face ---
+        // --- Skull, nose ---
         head.addChild(ModelEntity(mesh: try AvatarGeometry.headMesh(), materials: [skin]))
+        head.addChild(ModelEntity(mesh: try AvatarGeometry.nose(), materials: [skin]))
 
-        let eyeMesh = try AvatarGeometry.eyeball()
-        let lidRadius = Stylized.eyeRadius + 0.002
-        let lidMesh = try AvatarGeometry.eyeSector(
-            radius: lidRadius, polar: 0.32...1.06, azimuth: -1.15...1.15
-        )
-        let lashMesh = try AvatarGeometry.eyeSector(
-            radius: lidRadius + 0.0006, polar: 0.99...1.08, azimuth: -1.18...1.18
-        )
-        let lowerLidMesh = try AvatarGeometry.eyeSector(
-            radius: lidRadius, polar: 1.82...2.16, azimuth: -0.95...0.95
-        )
-        let lowerLinerMesh = try AvatarGeometry.eyeSector(
-            radius: lidRadius + 0.0004, polar: 1.78...1.86, azimuth: -1.0...1.0
-        )
-
+        // --- Eyes: layered graphic assemblies ---
         for side: Float in [-1, 1] {
-            let center = Stylized.eyeCenter(side: side)
+            let eyeRoot = Entity()
+            eyeRoot.position = Stylized.eyeCenter(side: side)
+            // Cat-eye tilt: outer corners up.
+            eyeRoot.orientation = simd_quatf(angle: side * Stylized.eyeTilt, axis: [0, 0, 1])
 
-            let eyePivot = side < 0 ? eyeL : eyeR
-            eyePivot.position = center
-            eyePivot.addChild(ModelEntity(mesh: eyeMesh, materials: [eye]))
-            head.addChild(eyePivot)
+            eyeRoot.addChild(ModelEntity(mesh: try AvatarGeometry.sclera(side: side), materials: [sclera]))
 
+            let irisPivot = side < 0 ? irisL : irisR
+            irisPivot.position = Self.irisHome
+            irisPivot.addChild(ModelEntity(mesh: try AvatarGeometry.irisDisc(), materials: [iris]))
+            let sparkle = ModelEntity(mesh: try AvatarGeometry.glint(), materials: [glint])
+            sparkle.position = SIMD3(-side * 0.0032, 0.0034, 0.0008)
+            irisPivot.addChild(sparkle)
+            eyeRoot.addChild(irisPivot)
+
+            eyeRoot.addChild(ModelEntity(mesh: try AvatarGeometry.lashBand(side: side), materials: [makeup]))
+            eyeRoot.addChild(ModelEntity(mesh: try AvatarGeometry.lowerLiner(side: side), materials: [makeup]))
+
+            let lidBuilt = try AvatarGeometry.lidPlate(side: side)
             let lidPivot = side < 0 ? lidL : lidR
-            lidPivot.position = center
-            lidPivot.addChild(ModelEntity(mesh: lidMesh, materials: [skin]))
-            lidPivot.addChild(ModelEntity(mesh: lashMesh, materials: [makeup]))
-            head.addChild(lidPivot)
+            lidPivot.position = lidBuilt.hinge
+            lidPivot.addChild(ModelEntity(mesh: lidBuilt.mesh, materials: [lidShadow]))
+            eyeRoot.addChild(lidPivot)
 
-            let lowerLid = ModelEntity(mesh: lowerLidMesh, materials: [skin])
-            lowerLid.position = center
-            head.addChild(lowerLid)
-            let lowerLiner = ModelEntity(mesh: lowerLinerMesh, materials: [makeup])
-            lowerLiner.position = center
-            head.addChild(lowerLiner)
-
-            let wing = ModelEntity(mesh: try AvatarGeometry.linerWing(side: side), materials: [makeup])
-            wing.position = center
-            head.addChild(wing)
+            head.addChild(eyeRoot)
         }
 
+        // --- Brows ---
         let browBuiltL = try AvatarGeometry.brow(side: -1)
         let browBuiltR = try AvatarGeometry.brow(side: 1)
         browL = Self.handle(mesh: browBuiltL.mesh, material: makeup, at: browBuiltL.pivot)
@@ -140,10 +150,9 @@ final class AvatarRig {
         head.addChild(browL.pivot)
         head.addChild(browR.pivot)
 
-        // Mouth: upper halves pivot at the mouth anchor; lower halves ride the
-        // jaw hinge and still roll about the anchor for corner acting.
+        // --- Mouth ---
         let mouth = Stylized.mouthAnchor
-        let cavity = ModelEntity(mesh: try AvatarGeometry.innerMouth(), materials: [innerMouth])
+        let cavity = ModelEntity(mesh: try AvatarGeometry.innerMouth(), materials: [cavityMaterial])
         cavity.position = mouth
         head.addChild(cavity)
 
@@ -163,15 +172,15 @@ final class AvatarRig {
         jawPivot.addChild(lipLR)
         head.addChild(jawPivot)
 
-        // --- Hair: scalp cap rides the head; lengths hang on sway pivots ---
+        // --- Hair on the head ---
         head.addChild(ModelEntity(mesh: try AvatarGeometry.hairScalp(), materials: [hair]))
         let curtainL = Self.pivoted(
             try AvatarGeometry.hairCurtain(side: -1), material: hair,
-            at: SIMD3(-0.048, 0.075, 0.008)
+            at: SIMD3(-0.048, 0.062, 0.006)
         )
         let curtainR = Self.pivoted(
             try AvatarGeometry.hairCurtain(side: 1), material: hair,
-            at: SIMD3(0.048, 0.075, 0.008)
+            at: SIMD3(0.048, 0.062, 0.006)
         )
         head.addChild(curtainL)
         head.addChild(curtainR)
@@ -234,8 +243,8 @@ final class AvatarRig {
         fill.light.intensity = 450
         fill.look(at: [0, 0, 0], from: [0.1, 0.3, 1], relativeTo: nil)
 
-        camera.camera.fieldOfViewInDegrees = 23
-        camera.position = [0, 0.06, 0.44]
+        camera.camera.fieldOfViewInDegrees = 22
+        camera.position = [0, 0.055, 0.44]
 
         stage.addChild(root)
         stage.addChild(keyLight)
@@ -244,8 +253,6 @@ final class AvatarRig {
         stage.addChild(camera)
     }
 
-    /// Continuous mood tint: ember warmth cooling toward rose as her edge
-    /// sharpens. Called every frame with an already-smoothed 0…1 value.
     func tintLights(chill: Double, glow: Double) {
         keyLight.light.color = Self.blend(Self.ember, Self.rose, Float(chill))
         keyLight.light.intensity = Float(12000 + glow * 9000)
