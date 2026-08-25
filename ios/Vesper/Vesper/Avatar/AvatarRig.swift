@@ -57,9 +57,9 @@ final class AvatarRig {
         let irisTexture = try TextureResource.load(named: "VesperIris")
         let hairTexture = try TextureResource.load(named: "VesperHair")
 
-        // --- Materials ---
+        // --- Materials (colors keyed to the blonde look target) ---
         var skin = PhysicallyBasedMaterial()
-        skin.baseColor = .init(tint: UIColor(red: 0.94, green: 0.85, blue: 0.78, alpha: 1))
+        skin.baseColor = .init(tint: UIColor(red: 0.95, green: 0.865, blue: 0.815, alpha: 1))
         skin.roughness = 0.55
         skin.metallic = 0.0
 
@@ -78,11 +78,17 @@ final class AvatarRig {
 
         let glint = UnlitMaterial(color: UIColor(red: 0.98, green: 0.96, blue: 0.93, alpha: 1))
 
-        var makeup = PhysicallyBasedMaterial()  // liner, lashes, brows
-        makeup.baseColor = .init(tint: UIColor(red: 0.075, green: 0.055, blue: 0.042, alpha: 1))
+        var makeup = PhysicallyBasedMaterial()  // liner + lashes stay dark, smoky
+        makeup.baseColor = .init(tint: UIColor(red: 0.098, green: 0.071, blue: 0.055, alpha: 1))
         makeup.roughness = 0.35
         makeup.metallic = 0.0
         makeup.faceCulling = .none
+
+        var browTint = PhysicallyBasedMaterial()  // taupe-brown, sharper than black
+        browTint.baseColor = .init(tint: UIColor(red: 0.243, green: 0.180, blue: 0.141, alpha: 1))
+        browTint.roughness = 0.42
+        browTint.metallic = 0.0
+        browTint.faceCulling = .none
 
         var lidShadow = PhysicallyBasedMaterial()  // smoky eyeshadow tone
         lidShadow.baseColor = .init(tint: UIColor(red: 0.55, green: 0.42, blue: 0.40, alpha: 1))
@@ -90,12 +96,17 @@ final class AvatarRig {
         lidShadow.metallic = 0.0
         lidShadow.faceCulling = .none
 
-        var lip = PhysicallyBasedMaterial()
-        lip.baseColor = .init(tint: UIColor(red: 0.38, green: 0.12, blue: 0.19, alpha: 1))
-        lip.roughness = 0.33
+        var lip = PhysicallyBasedMaterial()  // mauve / dusty rose
+        lip.baseColor = .init(tint: UIColor(red: 0.73, green: 0.50, blue: 0.49, alpha: 1))
+        lip.roughness = 0.30
         lip.metallic = 0.0
-        lip.sheen = .init(tint: UIColor(red: 0.55, green: 0.25, blue: 0.33, alpha: 1))
+        lip.sheen = .init(tint: UIColor(red: 0.86, green: 0.66, blue: 0.64, alpha: 1))
         lip.faceCulling = .none
+
+        var teethTint = PhysicallyBasedMaterial()
+        teethTint.baseColor = .init(tint: UIColor(red: 0.91, green: 0.88, blue: 0.84, alpha: 1))
+        teethTint.roughness = 0.4
+        teethTint.metallic = 0.0
 
         var hair = PhysicallyBasedMaterial()
         hair.baseColor = .init(texture: .init(hairTexture))
@@ -148,8 +159,8 @@ final class AvatarRig {
         // --- Brows ---
         let browBuiltL = try AvatarGeometry.brow(side: -1)
         let browBuiltR = try AvatarGeometry.brow(side: 1)
-        browL = Self.handle(mesh: browBuiltL.mesh, material: makeup, at: browBuiltL.pivot)
-        browR = Self.handle(mesh: browBuiltR.mesh, material: makeup, at: browBuiltR.pivot)
+        browL = Self.handle(mesh: browBuiltL.mesh, material: browTint, at: browBuiltL.pivot)
+        browR = Self.handle(mesh: browBuiltR.mesh, material: browTint, at: browBuiltR.pivot)
         head.addChild(browL.pivot)
         head.addChild(browR.pivot)
 
@@ -158,6 +169,10 @@ final class AvatarRig {
         let cavity = ModelEntity(mesh: try AvatarGeometry.innerMouth(), materials: [cavityMaterial])
         cavity.position = mouth
         head.addChild(cavity)
+        // Upper teeth, just visible through the resting part of the lips.
+        let teeth = ModelEntity(mesh: try AvatarGeometry.teeth(), materials: [teethTint])
+        teeth.position = mouth
+        head.addChild(teeth)
 
         lipUL.position = mouth
         lipUL.addChild(ModelEntity(mesh: try AvatarGeometry.lipHalf(side: -1, upper: true), materials: [lip]))

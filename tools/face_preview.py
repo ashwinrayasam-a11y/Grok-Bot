@@ -37,7 +37,7 @@ HEAD_KEYS = [
 EYE_Y = -0.008
 EYE_SPACING = 0.036
 EYE_WIDTH = 0.036
-EYE_TILT = 0.12
+EYE_TILT = 0.08
 ALMOND_UP = 0.0112
 ALMOND_UP_POW = 0.88
 ALMOND_LO = 0.0078
@@ -45,13 +45,13 @@ IRIS_R = 0.0085
 LASH_TH = 0.0042
 WING_LEN = 0.16      # t extension past 1.0
 WING_RISE = 0.055
-BROW = dict(x0=0.014, x1=0.056, y0=0.0125, rise=0.0095, fall=0.0095, peak=0.66,
-            th=0.0042, th_taper=0.68)
+BROW = dict(x0=0.014, x1=0.055, y0=0.0122, rise=0.0105, fall=0.0125, peak=0.62,
+            th=0.0050, th_taper=0.62)
 MOUTH_Y = -0.050
 MOUTH_HALF_W = 0.018
-LIP_UP = 0.0046
+LIP_UP = 0.0050
 LIP_DIP = 0.0016
-LIP_LO = 0.0084
+LIP_LO = 0.0090
 LIPLINE_DROP = 0.0012
 NOSE_TOP = -0.012
 NOSE_LEN = 0.016
@@ -60,15 +60,16 @@ HAIRLINE_Y = 0.040  # arc handled below: center 0.048 dipping to 0.030 at temple
 CURTAIN_INNER0 = 0.048
 
 INK = (20, 15, 12)
-SKIN = (240, 217, 199)
-SKIN_SHADE = (219, 192, 172)
-HAIR = (26, 19, 14)
-MAKEUP = (19, 14, 11)
+SKIN = (242, 220, 208)
+SKIN_SHADE = (224, 196, 184)
+HAIR = (198, 168, 124)
+MAKEUP = (25, 18, 14)
+BROW_C = (62, 46, 36)
 SCLERA = (242, 237, 229)
 IRIS = (98, 108, 88)
 PUPIL = (14, 13, 12)
-LIP = (97, 31, 48)
-SHADOW = (208, 178, 158)
+LIP = (186, 128, 126)
+SHADOW = (216, 188, 176)
 
 
 def smoothstep(t: float) -> float:
@@ -237,25 +238,34 @@ def render(path: str):
             th = BROW["th"] * (1 - BROW["th_taper"] * t) + 0.0008
             lo.append((x, y))
             hi.append((x, y + th))
-        poly(d, lo + list(reversed(hi)), MAKEUP)
+        poly(d, lo + list(reversed(hi)), BROW_C)
 
-    # Lips
+    # Lips: slightly parted at rest, like the reference
     n = 20
-    upper_out, lower_out, lipline = [], [], []
+    upper_out, lower_out, line_up, line_lo = [], [], [], []
+    GAP_UP, GAP_LO = 0.0007, 0.0013
     for i in range(-n, n + 1):
         t = abs(i) / n
         sgn = -1 if i < 0 else 1
         x = sgn * MOUTH_HALF_W * t
-        line_y = MOUTH_Y - 0.0006 - LIPLINE_DROP * t * t
+        base_y = MOUTH_Y - 0.0006 - LIPLINE_DROP * t * t
+        part = (1 - t ** 1.8)  # gap closes toward the corners
+        lu = base_y + GAP_UP * part
+        ll = base_y - GAP_LO * part
         dip = LIP_DIP * math.exp(-((t / 0.15) ** 2))
-        up = line_y + LIP_UP * (1 - t ** 1.6) - dip + 0.0006
-        lo = line_y - LIP_LO * (1 - t ** 1.5)
-        lipline.append((x, line_y))
+        up = lu + LIP_UP * (1 - t ** 1.6) - dip + 0.0006
+        lo = ll - LIP_LO * (1 - t ** 1.5)
+        line_up.append((x, lu))
+        line_lo.append((x, ll))
         upper_out.append((x, up))
         lower_out.append((x, lo))
-    poly(d, upper_out + list(reversed(lipline)), LIP)
-    poly(d, lipline + list(reversed(lower_out)), LIP)
-    d.line([to_px(*p) for p in lipline], fill=(60, 16, 28), width=2 * SS)
+    poly(d, line_up + list(reversed(line_lo)), (58, 34, 36))        # parted gap
+    teeth = [(x, y) for (x, y) in line_up if abs(x) < MOUTH_HALF_W * 0.55]
+    teeth += [(x, y - 0.0009) for (x, y) in reversed(teeth)]
+    if len(teeth) > 5:
+        poly(d, teeth, (232, 224, 214))                              # teeth hint
+    poly(d, upper_out + list(reversed(line_up)), LIP)
+    poly(d, line_lo + list(reversed(lower_out)), LIP)
 
     img = img.resize((640, 900), Image.LANCZOS)
     img.save(path)

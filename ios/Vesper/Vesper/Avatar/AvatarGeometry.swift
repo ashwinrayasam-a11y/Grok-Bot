@@ -70,7 +70,7 @@ enum Stylized {
     static let eyeY: Float = -0.008
     static let eyeSpacing: Float = 0.036   // eye centers at ±this
     static let eyeWidth: Float = 0.036
-    static let eyeTilt: Float = 0.12       // cat-eye: outer corners up
+    static let eyeTilt: Float = 0.08       // soft cat-eye: outer corners up
 
     static func eyeCenter(side: Float) -> SIMD3<Float> {
         SIMD3(side * eyeSpacing, eyeY, frontZ(eyeY) + 0.001)
@@ -377,10 +377,12 @@ enum AvatarGeometry {
     /// relative to the returned pivot.
     static func brow(side: Float) throws -> (mesh: MeshResource, pivot: SIMD3<Float>) {
         func spine(_ t: Float) -> SIMD3<Float> {
-            let rise = min(1, t / 0.66)
-            let fall = max(0, (t - 0.66) / 0.34)
-            let y: Float = 0.0125 + 0.0095 * rise - 0.0095 * fall
-            let x = side * (0.014 + 0.056 * t)
+            // Sharp angular arch peaking ~62% out with a decisive tail drop
+            // (the reference's defined brow).
+            let rise = min(1, t / 0.62)
+            let fall = max(0, (t - 0.62) / 0.38)
+            let y: Float = 0.0122 + 0.0105 * rise - 0.0125 * fall
+            let x = side * (0.014 + 0.055 * t)
             return SIMD3(x, y, Stylized.frontZ(y) + 0.002 - 0.006 * max(0, t - 0.8))
         }
         let pivot = spine(0.45)
@@ -388,7 +390,7 @@ enum AvatarGeometry {
             us: ramp(0, 1, 16),
             vs: ramp(0, 1, 2),
             point: { t, s in
-                let thickness: Float = 0.0042 * (1 - 0.68 * t) + 0.0008
+                let thickness: Float = 0.0050 * (1 - 0.62 * t) + 0.0008
                 return spine(t) + SIMD3(0, s * thickness, 0) - pivot
             },
             uv: { SIMD2($0, $1) }
@@ -398,30 +400,47 @@ enum AvatarGeometry {
 
     // MARK: - Mouth (filled lip plates, not slits)
 
-    /// Half of the upper lip: a filled plate from the lip line up to the
-    /// cupid's bow, gently bowed forward. Vertices relative to the mouth anchor.
+    /// Half of a lip: a filled plate from the lip line to the outer edge,
+    /// gently bowed forward. The lips rest *slightly parted* (the gap closes
+    /// toward the corners), like the reference. Vertices relative to the
+    /// mouth anchor.
     static func lipHalf(side: Float, upper: Bool) throws -> MeshResource {
         let mesh = GridMesh.build(
             us: ramp(0, 1, 14),
             vs: ramp(0, 1, 5),
             point: { t, s in
                 let x = side * 0.018 * t
+                let part = 1 - powf(t, 1.8)
                 let lipline: Float = -0.0006 - 0.0012 * t * t
+                    + (upper ? 0.0007 : -0.0013) * part
                 let edge: Float
                 if upper {
                     let dip = 0.0016 * exp(-powf(t / 0.15, 2))
-                    edge = 0.0046 * (1 - powf(t, 1.6)) - dip
+                    edge = lipline + 0.0050 * (1 - powf(t, 1.6)) - dip
                 } else {
-                    edge = -0.0084 * (1 - powf(t, 1.5))
+                    edge = lipline - 0.0090 * (1 - powf(t, 1.5))
                 }
                 let y = lipline + (edge - lipline) * s
-                let bow = (upper ? 0.0024 : 0.0034) * sin(.pi * s) * (1 - 0.5 * t)
+                let bow = (upper ? 0.0024 : 0.0036) * sin(.pi * s) * (1 - 0.5 * t)
                 return SIMD3(x, y, 0.0012 + bow)
             },
             uv: { SIMD2($0, $1) },
             rawNormals: true
         )
         return try mesh.resource(named: "lip")
+    }
+
+    /// Upper teeth, glimpsed through the resting part of the lips.
+    static func teeth() throws -> MeshResource {
+        let mesh = GridMesh.build(
+            us: ramp(-1, 1, 6),
+            vs: ramp(0, 1, 2),
+            point: { u, v in
+                SIMD3(u * 0.0105, -0.0002 - v * 0.0017, -0.0015)
+            },
+            uv: { SIMD2(($0 + 1) / 2, $1) }
+        )
+        return try mesh.resource(named: "teeth")
     }
 
     /// Dark cavity behind the lips, revealed as the jaw drops.
