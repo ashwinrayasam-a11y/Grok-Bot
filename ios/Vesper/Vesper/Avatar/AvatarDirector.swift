@@ -270,9 +270,9 @@ final class AvatarDirector {
             translation: SIMD3(Float(weightS.value), 0, Float(leanS.value))
         )
 
-        let breathScale = Float(1 + 0.014 * breathFollow.value)
-        rig.chest.transform.scale = SIMD3(breathScale, 1 + Float(0.018 * breathFollow.value), breathScale)
-        rig.chest.transform.translation.y = -0.185 + Float(0.0035 * breathFollow.value)
+        let breathScale = Float(1 + 0.012 * breathFollow.value)
+        rig.chest.transform.scale = SIMD3(breathScale, 1 + Float(0.014 * breathFollow.value), breathScale)
+        rig.chest.transform.translation.y = AvatarRig.chestHome.y + Float(0.0032 * breathFollow.value)
 
         let yaw = simd_quatf(angle: Float(yawS.value), axis: [0, 1, 0])
         let pitch = simd_quatf(angle: Float(pitchS.value + 0.004 * breathFollow.value), axis: [1, 0, 0])

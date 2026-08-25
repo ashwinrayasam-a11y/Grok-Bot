@@ -47,6 +47,9 @@ final class AvatarRig {
     /// Iris rest offset in eye-root space (proud of the sclera bulge).
     static let irisHome = SIMD3<Float>(0, 0, 0.0045)
 
+    /// Silk camisole rest position — the director breathes it around this.
+    static let chestHome = SIMD3<Float>(0, -0.15, 0)
+
     private static let ember = UIColor(red: 0.77, green: 0.36, blue: 0.15, alpha: 1)
     private static let rose = UIColor(red: 0.66, green: 0.30, blue: 0.30, alpha: 1)
 
@@ -191,23 +194,22 @@ final class AvatarRig {
         head.position = SIMD3(0, 0.055, 0) - neckJoint
         neckPivot.addChild(head)
 
-        // --- Torso ---
-        let neck = ModelEntity(mesh: try AvatarGeometry.neck(), materials: [skin])
-        let chestBuilt = try AvatarGeometry.chestSkin()
-        let decollete = ModelEntity(mesh: chestBuilt.mesh, materials: [skin])
-        decollete.position = chestBuilt.center
-        let silkBuilt = try AvatarGeometry.silkChest()
+        // --- Body: swept figure (neck, shoulders, bust) in a silk camisole ---
+        let figure = ModelEntity(mesh: try AvatarGeometry.torsoSkin(), materials: [skin])
+        let silkBuilt = try AvatarGeometry.torsoSilk()
         chest = ModelEntity(mesh: silkBuilt.mesh, materials: [silk])
         chest.position = silkBuilt.center
+        let strapL = ModelEntity(mesh: try AvatarGeometry.silkStrap(side: -1), materials: [silk])
+        let strapR = ModelEntity(mesh: try AvatarGeometry.silkStrap(side: 1), materials: [silk])
 
         let fallL = Self.pivoted(
-            try AvatarGeometry.hairFall(side: -1), material: hair, at: SIMD3(-0.08, 0.10, -0.03)
+            try AvatarGeometry.hairFall(side: -1), material: hair, at: SIMD3(-0.10, 0.10, -0.055)
         )
         let fallR = Self.pivoted(
-            try AvatarGeometry.hairFall(side: 1), material: hair, at: SIMD3(0.08, 0.10, -0.03)
+            try AvatarGeometry.hairFall(side: 1), material: hair, at: SIMD3(0.10, 0.10, -0.055)
         )
         let back = Self.pivoted(
-            try AvatarGeometry.hairBack(), material: hair, at: SIMD3(0, 0.12, -0.06)
+            try AvatarGeometry.hairBack(), material: hair, at: SIMD3(0, 0.12, -0.072)
         )
 
         hairPieces = [
@@ -221,9 +223,10 @@ final class AvatarRig {
         torso.addChild(back)
         torso.addChild(fallL)
         torso.addChild(fallR)
-        torso.addChild(neck)
-        torso.addChild(decollete)
+        torso.addChild(figure)
         torso.addChild(chest)
+        torso.addChild(strapL)
+        torso.addChild(strapR)
         torso.addChild(neckPivot)
         root.addChild(torso)
 

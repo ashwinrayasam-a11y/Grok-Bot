@@ -75,6 +75,67 @@ enum Stylized {
     static let mouthY: Float = -0.052
     static let mouthAnchor = SIMD3<Float>(0, mouthY, frontZ(mouthY) + 0.0015)
     static let jawHinge = SIMD3<Float>(0, mouthY - 0.006, mouthAnchor.z - 0.048)
+
+    // MARK: Torso (world/torso space; the head sits at world y 0.055)
+
+    /// Torso profile keys, neck top → crop: (y, halfWidth, frontDepth,
+    /// backDepth, n). Slender neck, sloped trapezius, real shoulders, a bust
+    /// line, under-bust and ribcage taper — a figure, not a gumdrop.
+    private static let torsoKeys: [(y: Float, w: Float, dF: Float, dB: Float, n: Float)] = [
+        (-0.018, 0.023, 0.026, 0.024, 2.0),  // neck top (tucks into the head)
+        (-0.055, 0.026, 0.028, 0.026, 2.0),  // neck base
+        (-0.070, 0.048, 0.034, 0.036, 2.2),  // trapezius slope
+        (-0.085, 0.095, 0.040, 0.042, 2.4),
+        (-0.095, 0.108, 0.042, 0.044, 2.6),  // shoulder line (widest)
+        (-0.115, 0.104, 0.046, 0.046, 2.5),  // upper chest
+        (-0.140, 0.096, 0.058, 0.048, 2.4),  // bust swell
+        (-0.158, 0.090, 0.066, 0.048, 2.3),  // bust line (max forward)
+        (-0.175, 0.084, 0.056, 0.046, 2.3),  // under-bust
+        (-0.205, 0.076, 0.046, 0.044, 2.3),  // ribcage
+        (-0.245, 0.070, 0.042, 0.042, 2.3),
+        (-0.300, 0.072, 0.044, 0.044, 2.3),  // crop bottom
+    ]
+
+    static let torsoTop: Float = -0.018
+    static let torsoBottom: Float = -0.300
+
+    static func torsoProfile(y: Float) -> (w: Float, dF: Float, dB: Float, n: Float) {
+        let yy = min(torsoTop, max(torsoBottom, y))
+        for i in 0..<(torsoKeys.count - 1) {
+            let a = torsoKeys[i], b = torsoKeys[i + 1]
+            if yy <= a.y && yy >= b.y {
+                let t = (a.y - yy) / max(a.y - b.y, 1e-5)
+                let s = t * t * (3 - 2 * t)
+                return (
+                    a.w + (b.w - a.w) * s,
+                    a.dF + (b.dF - a.dF) * s,
+                    a.dB + (b.dB - a.dB) * s,
+                    a.n + (b.n - a.n) * s
+                )
+            }
+        }
+        let last = torsoKeys[torsoKeys.count - 1]
+        return (last.w, last.dF, last.dB, last.n)
+    }
+
+    /// Torso surface with a soft center crease through the bust zone.
+    static func torsoSurface(_ psi: Float, _ y: Float) -> SIMD3<Float> {
+        let p = torsoProfile(y: y)
+        let c = cos(psi), s = sin(psi)
+        let e = 2 / p.n
+        let depth = c >= 0 ? p.dF : p.dB
+        var z = powf(abs(c), e) * depth * (c >= 0 ? 1 : -1)
+        let x = powf(abs(s), e) * p.w * (s >= 0 ? 1 : -1)
+        if z > 0 {
+            let bustZone = exp(-powf((y + 0.152) / 0.028, 2))
+            z -= z * 0.13 * exp(-powf(x / 0.02, 2)) * bustZone
+        }
+        return SIMD3(x, y, z)
+    }
+
+    static func torsoFrontZ(_ y: Float) -> Float {
+        torsoProfile(y: y).dF
+    }
 }
 
 /// Parametric grid mesh with numeric normals.
@@ -370,67 +431,76 @@ enum AvatarGeometry {
         return try mesh.resource(named: "innerMouth")
     }
 
-    // MARK: - Neck, chest, silk
+    // MARK: - Body (swept figure: neck → shoulders → bust → ribcage)
 
-    static func neck() throws -> MeshResource {
+    /// Bare skin: the full torso sweep including the neck, connecting cleanly
+    /// into the head's underside.
+    static func torsoSkin() throws -> MeshResource {
         let mesh = GridMesh.build(
-            us: ramp(0, 2 * .pi, 20),
-            vs: ramp(0, 1, 6),
-            point: { phi, t in
-                let flare = 1 + 0.38 * powf(t, 2.2)
-                return SIMD3(
-                    0.023 * flare * sin(phi),
-                    0.0 - 0.13 * t,
-                    0.027 * flare * cos(phi) - 0.006
-                )
-            },
-            uv: { SIMD2($0 / (2 * .pi), $1) },
-            outwardFrom: SIMD3(0, -0.06, -0.006)
-        )
-        return try mesh.resource(named: "neck")
-    }
-
-    static func chestSkin() throws -> (mesh: MeshResource, center: SIMD3<Float>) {
-        let center = SIMD3<Float>(0, -0.118, -0.008)
-        let radii = SIMD3<Float>(0.125, 0.06, 0.048)
-        let mesh = GridMesh.build(
-            us: ramp(0, 1, 16),
-            vs: ramp(0.18, 0.85, 8),
-            point: { u, v in
-                let phi = (u - 0.5) * .pi
-                let theta = v * .pi
-                return SIMD3(
-                    radii.x * sin(theta) * sin(phi),
-                    radii.y * cos(theta),
-                    radii.z * sin(theta) * cos(phi)
-                )
-            },
-            uv: { SIMD2($0, $1) },
+            us: ramp(-.pi, .pi, 44),
+            vs: ramp(Stylized.torsoTop, Stylized.torsoBottom, 26),
+            point: { Stylized.torsoSurface($0, $1) },
+            uv: { SIMD2(($0 / .pi + 1) / 2, ($1 - Stylized.torsoBottom) / (Stylized.torsoTop - Stylized.torsoBottom)) },
             outwardFrom: .zero
         )
-        return (try mesh.resource(named: "chestSkin"), center)
+        return try mesh.resource(named: "torsoSkin")
     }
 
-    static func silkChest() throws -> (mesh: MeshResource, center: SIMD3<Float>) {
-        let center = SIMD3<Float>(0, -0.185, -0.012)
-        let radii = SIMD3<Float>(0.19, 0.075, 0.06)
+    /// Camisole neckline: dips at the center front (sweetheart), rises over
+    /// the chest sides, sits straight and higher across the back.
+    static func necklineY(_ psi: Float) -> Float {
+        let front: Float = -0.116 - 0.016 * exp(-powf(psi / 0.5, 2))
+        let k = min(1, max(0, (abs(psi) - 1.1) / 0.8))
+        let s = k * k * (3 - 2 * k)
+        return front * (1 - s) + (-0.102) * s
+    }
+
+    /// Merlot silk camisole: the same torso surface, offset 1.5 mm proud, from
+    /// the neckline down to the crop. Soft drape folds; put-together, fitted.
+    /// Vertices relative to `center` so breathing can scale it in place.
+    static func torsoSilk() throws -> (mesh: MeshResource, center: SIMD3<Float>) {
+        let center = SIMD3<Float>(0, -0.15, 0)
         let mesh = GridMesh.build(
-            us: ramp(0, 1, 20),
-            vs: ramp(0.15, 0.85, 10),
-            point: { u, v in
-                let phi = (u - 0.5) * .pi
-                let theta = v * .pi
-                let fold = 0.0016 * sin(u * 22) * sin(v * 6)
-                return SIMD3(
-                    radii.x * sin(theta) * sin(phi),
-                    radii.y * cos(theta),
-                    (radii.z + fold) * sin(theta) * cos(phi)
-                )
+            us: ramp(-.pi, .pi, 44),
+            vs: ramp(0, 1, 18),
+            point: { psi, s in
+                let top = necklineY(psi)
+                let y = top + (Stylized.torsoBottom - top) * s
+                var p = Stylized.torsoSurface(psi, y)
+                let fold = 0.0014 * sin(psi * 9) * sin(s * 5.5)
+                let radial = SIMD3(p.x, 0, p.z)
+                let len = simd_length(radial)
+                if len > 1e-5 {
+                    p += radial / len * (0.0015 + fold)
+                }
+                return p - center
             },
-            uv: { SIMD2($0, $1) },
-            outwardFrom: .zero
+            uv: { SIMD2(($0 / .pi + 1) / 2, 1 - $1) },
+            outwardFrom: SIMD3(0, 0, 0) - center
         )
         return (try mesh.resource(named: "silk"), center)
+    }
+
+    /// Thin silk strap from the front neckline over the shoulder to the back.
+    static func silkStrap(side: Float) throws -> MeshResource {
+        let mesh = GridMesh.build(
+            us: ramp(0, 1, 12),
+            vs: ramp(-1, 1, 2),
+            point: { t, w in
+                let psi = side * (0.82 + 1.50 * t)
+                let y = -0.112 + 0.028 * sin(.pi * t) + w * 0.0035
+                var p = Stylized.torsoSurface(psi, y)
+                let radial = SIMD3(p.x, 0, p.z)
+                let len = simd_length(radial)
+                if len > 1e-5 {
+                    p += radial / len * 0.0018
+                }
+                return p
+            },
+            uv: { SIMD2($0, ($1 + 1) / 2) },
+            outwardFrom: .zero
+        )
+        return try mesh.resource(named: "strap")
     }
 
     // MARK: - Hair (frames the face; never a veil)
@@ -456,21 +526,29 @@ enum AvatarGeometry {
     }
 
     /// Front curtain: rooted at the scalp side, tucked behind the (opaque)
-    /// head across the face's height, emerging below the V-jaw to fall past
-    /// the shoulders. Frames the face; can never veil it.
+    /// head across the face's height, emerging below the V-jaw — then draping
+    /// forward OVER the shoulders and bust by tracking the torso profile, the
+    /// way long hair actually rests on a chest. Frames the face; never veils.
+    /// Built in head space (head center sits at world y +0.055).
     static func hairCurtain(side: Float) throws -> MeshResource {
         let band: ClosedRange<Float> = side < 0 ? 0.03...0.45 : 0.55...0.97
         let mesh = GridMesh.build(
             us: ramp(0, 1, 6),
-            vs: ramp(0, 1, 26),
+            vs: ramp(0, 1, 28),
             point: { s, t in
                 let inner: Float = 0.048 + 0.026 * powf(t, 0.9)
                 let width: Float = 0.038 + 0.024 * t
-                return SIMD3(
-                    side * (inner + s * width),
-                    0.062 - 0.50 * t + s * 0.003,
-                    0.006 - 0.018 * t - 0.030 * t * t - s * 0.022
-                )
+                let y: Float = 0.062 - 0.52 * t + s * 0.003
+                let worldY = y + 0.055
+                var z: Float = 0.006 - 0.018 * t - 0.024 * t * t - s * 0.020
+                if worldY < -0.06 {
+                    // Ride the chest: torso front + clearance, blended in.
+                    let k = min(1, (-worldY - 0.06) / 0.035)
+                    let blend = k * k * (3 - 2 * k)
+                    let drape = Stylized.torsoFrontZ(worldY) + 0.007 - s * 0.004
+                    z = z * (1 - blend) + drape * blend
+                }
+                return SIMD3(side * (inner + s * width), y, z)
             },
             uv: { s, t in
                 SIMD2(band.lowerBound + s * (band.upperBound - band.lowerBound), 1 - t)
@@ -479,7 +557,8 @@ enum AvatarGeometry {
         return try mesh.resource(named: "curtain")
     }
 
-    /// Side fall behind the shoulders (torso space).
+    /// Side fall behind the shoulders (torso space) — outside the new
+    /// shoulder width, behind the back plane.
     static func hairFall(side: Float) throws -> MeshResource {
         let band: ClosedRange<Float> = side < 0 ? 0.10...0.48 : 0.52...0.90
         let mesh = GridMesh.build(
@@ -487,9 +566,9 @@ enum AvatarGeometry {
             vs: ramp(0, 1, 24),
             point: { s, t in
                 SIMD3(
-                    side * (0.055 + 0.024 * t + s * 0.044),
+                    side * (0.075 + 0.030 * t + s * 0.050),
                     0.10 - 0.53 * t,
-                    -0.030 - 0.030 * t - s * 0.016
+                    -0.055 - 0.028 * t - s * 0.016
                 )
             },
             uv: { s, t in
@@ -499,17 +578,18 @@ enum AvatarGeometry {
         return try mesh.resource(named: "hairFall")
     }
 
-    /// Wide sheet down the back to mid-back (torso space).
+    /// Wide sheet down the back to mid-back (torso space) — a dark backdrop
+    /// visible beyond the shoulder silhouette.
     static func hairBack() throws -> MeshResource {
         let mesh = GridMesh.build(
             us: ramp(-1, 1, 14),
             vs: ramp(0, 1, 16),
             point: { u, v in
-                let half: Float = 0.130 + 0.075 * v
+                let half: Float = 0.150 + 0.080 * v
                 return SIMD3(
                     u * half,
                     0.12 - 0.57 * v,
-                    -0.062 - 0.02 * sin(v * .pi * 0.5) + 0.030 * u * u
+                    -0.072 - 0.02 * sin(v * .pi * 0.5) + 0.030 * u * u
                 )
             },
             uv: { SIMD2(($0 + 1) / 2, 1 - $1) }
