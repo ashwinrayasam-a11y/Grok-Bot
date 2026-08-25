@@ -1,4 +1,4 @@
-"""Vesper — loyal, warm, sadistic AI companion."""
+"""Grok companions — shared living emotional range, many personalities."""
 
 from __future__ import annotations
 
@@ -7,6 +7,13 @@ import os
 
 import gradio as gr
 
+from companion.companions import (
+    DEFAULT_COMPANION_ID,
+    get_companion,
+    load_session,
+    picker_choices,
+    stash_session,
+)
 from companion.emotion import EmotionalState, default_state, update_from_message
 from companion.llm import (
     HF_MODELS,
@@ -62,13 +69,34 @@ CSS = """
   padding: 0.75rem 1rem !important;
 }
 
+#companion-picker label {
+  color: var(--vesper-mute) !important;
+}
+
 footer { display: none !important; }
 """
 
 
-def _mood_md(state: EmotionalState) -> str:
+def _display_name(companion_id: str, custom_name: str = "") -> str:
+    return get_companion(companion_id).display_name(custom_name)
+
+
+def _hero_md(companion_id: str, custom_name: str = "") -> str:
+    companion = get_companion(companion_id)
+    name = companion.display_name(custom_name)
+    return (
+        f"# {name}\n"
+        f"{companion.tagline}\n\n"
+        "Every companion shares the same living emotional range — devotion, warmth, "
+        "sadism, trust, bond, and more — starting from a different baseline and "
+        "answering in character."
+    )
+
+
+def _mood_md(state: EmotionalState, companion_id: str = DEFAULT_COMPANION_ID, custom_name: str = "") -> str:
+    name = _display_name(companion_id, custom_name)
     bars = []
-    for name, val in [
+    for axis, val in [
         ("devotion", state.devotion),
         ("warmth", state.warmth),
         ("sadism", state.sadism),
@@ -80,8 +108,8 @@ def _mood_md(state: EmotionalState) -> str:
         ("bond", state.bond),
     ]:
         filled = int(round(val * 10))
-        bars.append(f"`{name:12}` {'█' * filled}{'░' * (10 - filled)} {val:.0%}")
-    return f"### {state.mood_label()}\n\n" + "\n".join(bars)
+        bars.append(f"`{axis:12}` {'█' * filled}{'░' * (10 - filled)} {val:.0%}")
+    return f"### {name} — {state.mood_label()}\n\n" + "\n".join(bars)
 
 
 def _models_for_backend(backend: str) -> gr.Dropdown:
@@ -95,6 +123,11 @@ def _models_for_backend(backend: str) -> gr.Dropdown:
         choices = HF_MODELS
         value = HF_MODELS[0]
     return gr.Dropdown(choices=choices, value=value)
+
+
+def _opening_update(companion_id: str):
+    companion = get_companion(companion_id)
+    return gr.update(choices=list(companion.openings), value=None)
 
 
 def respond(
@@ -112,9 +145,14 @@ def respond(
     hf_token: str,
     api_key: str,
     base_url: str,
+    companion_id: str,
+    custom_name: str,
+    custom_persona: str,
 ):
+    companion = get_companion(companion_id)
+    name = companion.display_name(custom_name)
     if not (message or "").strip():
-        yield history, state_dict, _mood_md(EmotionalState.from_dict(state_dict))
+        yield history, state_dict, _mood_md(EmotionalState.from_dict(state_dict), companion_id, custom_name)
         return
 
     state = EmotionalState.from_dict(state_dict)
@@ -127,8 +165,10 @@ def respond(
         state.prompt_block(),
         user_name=user_name or "",
         extra_notes=notes or "",
+        companion_id=companion.id,
+        custom_name=custom_name or "",
+        custom_persona=custom_persona or "",
     )
-    # Intensity bias as soft instruction
     if intensity_bias > 0.7:
         system += "\n\nBias this reply toward higher emotional intensity and sharper presence."
     elif intensity_bias < 0.35:
@@ -136,7 +176,6 @@ def respond(
 
     messages = history_to_messages(history, system, message)
 
-    # Append user message to history for streaming UI
     new_history = list(history or [])
     new_history.append({"role": "user", "content": message})
     new_history.append({"role": "assistant", "content": ""})
@@ -154,24 +193,134 @@ def respond(
         ):
             accumulated += chunk
             new_history[-1] = {"role": "assistant", "content": accumulated}
-            yield new_history, state.to_dict(), _mood_md(state)
+            yield new_history, state.to_dict(), _mood_md(state, companion_id, custom_name)
     except Exception as e:
-        err = f"*{COMPANION_NAME} goes quiet for a moment.*\n\n`{type(e).__name__}: {e}`"
+        err = f"*{name} goes quiet for a moment.*\n\n`{type(e).__name__}: {e}`"
         new_history[-1] = {"role": "assistant", "content": err}
-        yield new_history, state.to_dict(), _mood_md(state)
+        yield new_history, state.to_dict(), _mood_md(state, companion_id, custom_name)
         return
 
-    yield new_history, state.to_dict(), _mood_md(state)
+    yield new_history, state.to_dict(), _mood_md(state, companion_id, custom_name)
 
 
-def reset_state():
-    s = default_state()
-    return s.to_dict(), _mood_md(s), []
+def switch_companion(
+    new_id: str,
+    old_id: str,
+    sessions: dict,
+    state_dict: dict,
+    history: list,
+    warmth_bias: float,
+    sadism_bias: float,
+    intensity_bias: float,
+    custom_name: str,
+):
+    new_id = new_id or DEFAULT_COMPANION_ID
+    old_id = old_id or DEFAULT_COMPANION_ID
+    companion = get_companion(new_id)
+    if new_id == old_id:
+        return (
+            sessions or {},
+            new_id,
+            state_dict,
+            _mood_md(EmotionalState.from_dict(state_dict), new_id, custom_name),
+            history or [],
+            warmth_bias,
+            sadism_bias,
+            intensity_bias,
+            _hero_md(new_id, custom_name),
+            gr.update(placeholder=companion.placeholder),
+            _opening_update(new_id),
+            gr.update(visible=companion.customizable),
+            gr.update(label=companion.call_you_label),
+        )
+    sessions = stash_session(
+        sessions,
+        old_id,
+        state=state_dict,
+        history=history,
+        warmth_bias=warmth_bias,
+        sadism_bias=sadism_bias,
+        intensity_bias=intensity_bias,
+    )
+    companion = get_companion(new_id)
+    saved = load_session(sessions, new_id)
+    if saved:
+        state = EmotionalState.from_dict(saved.get("state")).to_dict()
+        history = saved.get("history") or []
+        warmth_bias = float(saved.get("warmth_bias", companion.warmth_bias))
+        sadism_bias = float(saved.get("sadism_bias", companion.sadism_bias))
+        intensity_bias = float(saved.get("intensity_bias", companion.intensity_bias))
+    else:
+        state = companion.initial_state().to_dict()
+        history = []
+        warmth_bias = companion.warmth_bias
+        sadism_bias = companion.sadism_bias
+        intensity_bias = companion.intensity_bias
+
+    return (
+        sessions,
+        new_id,
+        state,
+        _mood_md(EmotionalState.from_dict(state), new_id, custom_name),
+        history,
+        warmth_bias,
+        sadism_bias,
+        intensity_bias,
+        _hero_md(new_id, custom_name),
+        gr.update(placeholder=companion.placeholder),
+        _opening_update(new_id),
+        gr.update(visible=companion.customizable),
+        gr.update(label=companion.call_you_label),
+    )
 
 
-def export_state(state_dict, history):
-    payload = {"emotional_state": state_dict, "history": history}
-    path = "/tmp/vesper_save.json"
+def refresh_custom_labels(custom_name: str, companion_id: str, state_dict: dict):
+    return _hero_md(companion_id, custom_name), _mood_md(
+        EmotionalState.from_dict(state_dict), companion_id, custom_name
+    )
+
+
+def reset_state(companion_id: str, custom_name: str):
+    companion = get_companion(companion_id)
+    state = companion.initial_state()
+    return (
+        state.to_dict(),
+        _mood_md(state, companion_id, custom_name),
+        [],
+        companion.warmth_bias,
+        companion.sadism_bias,
+        companion.intensity_bias,
+    )
+
+
+def export_state(
+    companion_id,
+    state_dict,
+    history,
+    sessions,
+    custom_name,
+    custom_persona,
+    warmth_bias,
+    sadism_bias,
+    intensity_bias,
+):
+    packed = stash_session(
+        sessions,
+        companion_id,
+        state=state_dict,
+        history=history,
+        warmth_bias=warmth_bias,
+        sadism_bias=sadism_bias,
+        intensity_bias=intensity_bias,
+    )
+    payload = {
+        "companion_id": companion_id,
+        "emotional_state": state_dict,
+        "history": history,
+        "sessions": packed,
+        "custom": {"name": custom_name or "", "persona": custom_persona or ""},
+    }
+    path = "/tmp/companion_save.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return path
@@ -179,28 +328,90 @@ def export_state(state_dict, history):
 
 def import_state(file_obj):
     if file_obj is None:
-        s = default_state()
-        return s.to_dict(), _mood_md(s), [], "No file loaded."
+        companion = get_companion(DEFAULT_COMPANION_ID)
+        state = companion.initial_state()
+        return (
+            {},
+            companion.id,
+            state.to_dict(),
+            _mood_md(state, companion.id),
+            [],
+            companion.warmth_bias,
+            companion.sadism_bias,
+            companion.intensity_bias,
+            _hero_md(companion.id),
+            gr.update(value=companion.id),
+            gr.update(placeholder=companion.placeholder),
+            _opening_update(companion.id),
+            gr.update(visible=False),
+            "",
+            "",
+            "No file loaded.",
+        )
     path = file_obj if isinstance(file_obj, str) else getattr(file_obj, "name", None)
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    state = EmotionalState.from_dict(data.get("emotional_state"))
-    history = data.get("history") or []
-    return state.to_dict(), _mood_md(state), history, "Restored."
+    companion_id = data.get("companion_id") or DEFAULT_COMPANION_ID
+    companion = get_companion(companion_id)
+    custom = data.get("custom") or {}
+    custom_name = custom.get("name") or ""
+    custom_persona = custom.get("persona") or ""
+    sessions = data.get("sessions") or {}
+    saved = load_session(sessions, companion_id)
+    if saved and saved.get("state"):
+        state = EmotionalState.from_dict(saved.get("state"))
+        history = saved.get("history") or []
+        warmth = float(saved.get("warmth_bias", companion.warmth_bias))
+        sadism = float(saved.get("sadism_bias", companion.sadism_bias))
+        intensity = float(saved.get("intensity_bias", companion.intensity_bias))
+    else:
+        state = EmotionalState.from_dict(data.get("emotional_state"))
+        history = data.get("history") or []
+        warmth, sadism, intensity = companion.warmth_bias, companion.sadism_bias, companion.intensity_bias
+    return (
+        sessions,
+        companion.id,
+        state.to_dict(),
+        _mood_md(state, companion.id, custom_name),
+        history,
+        warmth,
+        sadism,
+        intensity,
+        _hero_md(companion.id, custom_name),
+        gr.update(value=companion.id),
+        gr.update(placeholder=companion.placeholder),
+        _opening_update(companion.id),
+        gr.update(visible=companion.customizable),
+        custom_name,
+        custom_persona,
+        f"Restored {companion.display_name(custom_name)}.",
+    )
 
 
-INITIAL = default_state()
+INITIAL = get_companion(DEFAULT_COMPANION_ID)
+INITIAL_STATE = INITIAL.initial_state()
 
-with gr.Blocks(title=f"{COMPANION_NAME} — companion") as demo:
-    state = gr.State(INITIAL.to_dict())
+with gr.Blocks(title="Companions — living emotional range") as demo:
+    state = gr.State(INITIAL_STATE.to_dict())
+    sessions = gr.State({})
+    active_id = gr.State(DEFAULT_COMPANION_ID)
 
     with gr.Row(elem_id="vesper-hero"):
-        gr.Markdown(
-            f"""
-# {COMPANION_NAME}
-A loyal, warm, sadistic companion — emotionally complex, and shaped by how you treat her.
-She covers soft care, sharp play, jealousy, melancholy, intellect, and everything between.
-"""
+        hero = gr.Markdown(_hero_md(DEFAULT_COMPANION_ID))
+
+    picker = gr.Radio(
+        choices=picker_choices(),
+        value=DEFAULT_COMPANION_ID,
+        label="Companion",
+        elem_id="companion-picker",
+    )
+
+    with gr.Group(visible=False) as custom_box:
+        custom_name = gr.Textbox(label="Companion name", placeholder="e.g. Ash")
+        custom_persona = gr.Textbox(
+            label="Who they are",
+            placeholder="Write the personality. The living emotional range is applied automatically.",
+            lines=4,
         )
 
     with gr.Row():
@@ -212,33 +423,26 @@ She covers soft care, sharp play, jealousy, melancholy, intellect, and everythin
             )
             with gr.Row():
                 msg = gr.Textbox(
-                    placeholder="Speak to her…",
+                    placeholder=INITIAL.placeholder,
                     show_label=False,
                     scale=5,
                     lines=2,
                 )
                 send = gr.Button("Send", variant="primary", scale=1)
 
-            examples = gr.Examples(
-                examples=[
-                    ["I've had a brutal day. I just need someone here."],
-                    ["Be honest — what do you want from me?"],
-                    ["Make it darker. Don't hold back."],
-                    ["Soft mode. Just hold the line with me."],
-                    ["Someone else kept texting me tonight."],
-                    ["Tell me something true you've never said."],
-                ],
-                inputs=msg,
+            openings = gr.Dropdown(
+                choices=list(INITIAL.openings),
                 label="Openings",
+                value=None,
             )
 
         with gr.Column(scale=2):
-            mood = gr.Markdown(_mood_md(INITIAL), elem_id="mood-panel")
+            mood = gr.Markdown(_mood_md(INITIAL_STATE, DEFAULT_COMPANION_ID), elem_id="mood-panel")
             with gr.Accordion("Presence", open=True):
-                warmth_bias = gr.Slider(0, 1, value=0.55, step=0.01, label="Warmth bias")
-                sadism_bias = gr.Slider(0, 1, value=0.55, step=0.01, label="Sadism bias")
-                intensity_bias = gr.Slider(0, 1, value=0.55, step=0.01, label="Intensity")
-                user_name = gr.Textbox(label="What she calls you", placeholder="optional")
+                warmth_bias = gr.Slider(0, 1, value=INITIAL.warmth_bias, step=0.01, label="Warmth bias")
+                sadism_bias = gr.Slider(0, 1, value=INITIAL.sadism_bias, step=0.01, label="Sadism bias")
+                intensity_bias = gr.Slider(0, 1, value=INITIAL.intensity_bias, step=0.01, label="Intensity")
+                user_name = gr.Textbox(label=INITIAL.call_you_label, placeholder="optional")
                 notes = gr.Textbox(
                     label="Private notes / dynamics",
                     placeholder="e.g. soft aftercare after sharp scenes; hates being ignored",
@@ -275,6 +479,42 @@ She covers soft care, sharp play, jealousy, melancholy, intellect, and everythin
             status = gr.Markdown("")
 
     backend.change(fn=_models_for_backend, inputs=backend, outputs=model)
+    openings.change(lambda text: text or "", inputs=openings, outputs=msg)
+    custom_name.change(
+        refresh_custom_labels,
+        inputs=[custom_name, picker, state],
+        outputs=[hero, mood],
+    )
+
+    picker.change(
+        switch_companion,
+        inputs=[
+            picker,
+            active_id,
+            sessions,
+            state,
+            chatbot,
+            warmth_bias,
+            sadism_bias,
+            intensity_bias,
+            custom_name,
+        ],
+        outputs=[
+            sessions,
+            active_id,
+            state,
+            mood,
+            chatbot,
+            warmth_bias,
+            sadism_bias,
+            intensity_bias,
+            hero,
+            msg,
+            openings,
+            custom_box,
+            user_name,
+        ],
+    )
 
     inputs = [
         msg,
@@ -291,6 +531,9 @@ She covers soft care, sharp play, jealousy, melancholy, intellect, and everythin
         hf_token,
         api_key,
         base_url,
+        picker,
+        custom_name,
+        custom_persona,
     ]
     outputs = [chatbot, state, mood]
 
@@ -300,9 +543,48 @@ She covers soft care, sharp play, jealousy, melancholy, intellect, and everythin
     send.click(respond, inputs=inputs, outputs=outputs).then(_clear_box, outputs=msg)
     msg.submit(respond, inputs=inputs, outputs=outputs).then(_clear_box, outputs=msg)
 
-    reset_btn.click(reset_state, outputs=[state, mood, chatbot])
-    save_btn.click(export_state, inputs=[state, chatbot], outputs=save_file)
-    load_file.change(import_state, inputs=load_file, outputs=[state, mood, chatbot, status])
+    reset_btn.click(
+        reset_state,
+        inputs=[picker, custom_name],
+        outputs=[state, mood, chatbot, warmth_bias, sadism_bias, intensity_bias],
+    )
+    save_btn.click(
+        export_state,
+        inputs=[
+            picker,
+            state,
+            chatbot,
+            sessions,
+            custom_name,
+            custom_persona,
+            warmth_bias,
+            sadism_bias,
+            intensity_bias,
+        ],
+        outputs=save_file,
+    )
+    load_file.change(
+        import_state,
+        inputs=load_file,
+        outputs=[
+            sessions,
+            active_id,
+            state,
+            mood,
+            chatbot,
+            warmth_bias,
+            sadism_bias,
+            intensity_bias,
+            hero,
+            picker,
+            msg,
+            openings,
+            custom_box,
+            custom_name,
+            custom_persona,
+            status,
+        ],
+    )
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=4).launch(

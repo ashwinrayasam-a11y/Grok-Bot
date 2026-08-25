@@ -1,12 +1,28 @@
-"""Vesper — emotionally complex AI companion."""
+"""Emotionally complex AI companions with a shared living emotional range."""
 
+from .companions import (
+    COMPANIONS,
+    DEFAULT_COMPANION_ID,
+    EMOTIONAL_RANGE,
+    Companion,
+    build_system_prompt,
+    get_companion,
+    list_companions,
+)
 from .emotion import EmotionalState, default_state, update_from_message
-from .personality import build_system_prompt, COMPANION_NAME
+from .personality import BASE_PERSONA, COMPANION_NAME
 
 __all__ = [
-    "EmotionalState",
-    "default_state",
-    "update_from_message",
-    "build_system_prompt",
+    "BASE_PERSONA",
     "COMPANION_NAME",
+    "COMPANIONS",
+    "DEFAULT_COMPANION_ID",
+    "EMOTIONAL_RANGE",
+    "Companion",
+    "EmotionalState",
+    "build_system_prompt",
+    "default_state",
+    "get_companion",
+    "list_companions",
+    "update_from_message",
 ]
