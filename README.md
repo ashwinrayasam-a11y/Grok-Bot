@@ -74,6 +74,6 @@ Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat` (message + histo
 2. In the app's settings, the Mac URL defaults to `http://Ashs-MacBook-Pro.local:7861` — find yours with `scutil --get LocalHostName` and tap **Knock** to test.
 3. Optionally paste an xAI key for Away mode. Grant microphone, speech, and local-network permissions when asked.
 
-The chip in the header shows which leg you're on: **Home · her Mac** (ember) or **Away · Grok** (rose). Hold the mic to talk — transcription happens on device — and her replies arrive as voice bubbles that autoplay.
+The chip in the header shows which leg you're on: **Home · her Mac** (ember) or **Away · Grok** (rose). Hold the mic to talk — transcription happens on device — and her spoken replies play themselves the moment they land, like a voice note. Tap a voice bubble to hear it again from the start; there are no play/pause controls.
 
 

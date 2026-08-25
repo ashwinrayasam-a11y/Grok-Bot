@@ -61,7 +61,6 @@ enum SettingsKeys {
     static let warmthBias = "warmthBias"
     static let sadismBias = "sadismBias"
     static let intensityBias = "intensityBias"
-    static let autoplay = "autoplay"
     static let awayModel = "awayModel"
 
     static let defaultMacURL = "http://Ashs-MacBook-Pro.local:7861"

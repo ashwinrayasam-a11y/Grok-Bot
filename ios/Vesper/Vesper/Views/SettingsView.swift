@@ -10,7 +10,6 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.warmthBias) private var warmthBias = 0.55
     @AppStorage(SettingsKeys.sadismBias) private var sadismBias = 0.55
     @AppStorage(SettingsKeys.intensityBias) private var intensityBias = 0.55
-    @AppStorage(SettingsKeys.autoplay) private var autoplay = true
     @AppStorage(SettingsKeys.awayModel) private var awayModel = SettingsKeys.defaultAwayModel
 
     @State private var xaiKey: String = Keychain.get(Keychain.xaiKeyAccount) ?? ""
@@ -71,7 +70,6 @@ struct SettingsView: View {
                     LabeledSlider("Warmth bias", value: $warmthBias)
                     LabeledSlider("Sadism bias", value: $sadismBias)
                     LabeledSlider("Intensity", value: $intensityBias)
-                    Toggle("Autoplay her voice", isOn: $autoplay)
                 }
 
                 Section {

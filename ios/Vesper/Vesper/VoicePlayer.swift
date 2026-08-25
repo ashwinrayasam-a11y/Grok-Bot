@@ -11,12 +11,10 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         (try? AVAudioPlayer(data: data))?.duration
     }
 
-    func toggle(_ message: ChatMessage) {
-        if playingID == message.id {
-            stop()
-        } else if let data = message.audio {
-            play(data, id: message.id)
-        }
+    /// Tap = replay from the start. No transport controls, like a voice note.
+    func replay(_ message: ChatMessage) {
+        guard let data = message.audio else { return }
+        play(data, id: message.id)
     }
 
     func play(_ data: Data, id: UUID) {

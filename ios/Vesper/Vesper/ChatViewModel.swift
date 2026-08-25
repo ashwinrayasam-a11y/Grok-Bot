@@ -32,7 +32,6 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.warmthBias: 0.55,
             SettingsKeys.sadismBias: 0.55,
             SettingsKeys.intensityBias: 0.55,
-            SettingsKeys.autoplay: true,
             SettingsKeys.awayModel: SettingsKeys.defaultAwayModel,
         ])
         if let snapshot = SoulStore.load() {
@@ -56,7 +55,6 @@ final class ChatViewModel: ObservableObject {
     private var warmthBias: Double { defaults.double(forKey: SettingsKeys.warmthBias) }
     private var sadismBias: Double { defaults.double(forKey: SettingsKeys.sadismBias) }
     private var intensityBias: Double { defaults.double(forKey: SettingsKeys.intensityBias) }
-    private var autoplay: Bool { defaults.bool(forKey: SettingsKeys.autoplay) }
     private var awayModel: String {
         defaults.string(forKey: SettingsKeys.awayModel) ?? SettingsKeys.defaultAwayModel
     }
@@ -169,7 +167,8 @@ final class ChatViewModel: ObservableObject {
             message.audioSeconds = VoicePlayer.duration(of: audio)
         }
         messages.append(message)
-        if autoplay, let audio {
+        // Her voice plays itself, like a voice note — no transport controls.
+        if let audio {
             voice.play(audio, id: message.id)
         }
     }

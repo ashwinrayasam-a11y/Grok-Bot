@@ -67,7 +67,8 @@ struct MessageBubble: View {
     }
 }
 
-/// Her voice: play control, live bars, duration.
+/// Her voice. It plays itself when the reply lands; tap to hear it again
+/// from the start. No play/pause, no scrubber — just her speaking.
 struct VoiceBar: View {
     @EnvironmentObject private var model: ChatViewModel
     let message: ChatMessage
@@ -78,14 +79,13 @@ struct VoiceBar: View {
 
     var body: some View {
         Button {
-            model.voice.toggle(message)
+            model.voice.replay(message)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(VesperTheme.bg)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(VesperTheme.ember))
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VesperTheme.ember)
+                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: isPlaying)
                 EqualizerBars(active: isPlaying)
                 if let seconds = message.audioSeconds {
                     Text(Self.timestamp(seconds))
@@ -95,6 +95,7 @@ struct VoiceBar: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(isPlaying ? "Her voice, speaking" : "Replay her voice")
     }
 
     private static func timestamp(_ seconds: Double) -> String {
