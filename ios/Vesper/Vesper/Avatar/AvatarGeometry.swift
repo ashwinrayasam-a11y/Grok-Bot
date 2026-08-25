@@ -165,16 +165,23 @@ enum AvatarGeometry {
         return try mesh.resource(named: "innerMouth")
     }
 
-    /// Hair: a crown cap that reaches lower at the back of the skull.
+    // MARK: - Hair
+    //
+    // Long, full, straight, dark — layered sheets all sampling the strand
+    // texture `VesperHair.png` (striations run along v; the bottom of the
+    // image is ragged strand-tip alpha, so lengths must map v = 1−t).
+
+    /// Crown cap hugging the skull, reaching lower at the back. Samples the
+    /// solid (non-tip) zone of the strand texture.
     static func hairCrown() throws -> MeshResource {
-        let center = SIMD3<Float>(0, FaceMap.y(0.27), -0.018)
-        let radii = SIMD3<Float>(0.094, 0.128, 0.078)
+        let center = SIMD3<Float>(0, FaceMap.y(0.26), -0.016)
+        let radii = SIMD3<Float>(0.098, 0.132, 0.082)
         let mesh = GridMesh.build(
             us: ramp(0, 1, 36),  // azimuth around the head
             vs: ramp(0.02, 1, 14),  // 0 = apex, 1 = brim
             point: { u, v in
                 let phi = u * 2 * .pi  // 0 = front
-                let maxPolar: Float = 1.22 + (1 - cos(phi)) * 0.36
+                let maxPolar: Float = 1.26 + (1 - cos(phi)) * 0.38
                 let theta = v * maxPolar
                 return center + SIMD3(
                     radii.x * sin(theta) * sin(phi),
@@ -182,45 +189,99 @@ enum AvatarGeometry {
                     radii.z * sin(theta) * cos(phi)
                 )
             },
-            uv: { SIMD2($0, $1) },
+            uv: { SIMD2($0, 1 - (0.02 + 0.5 * $1)) },
             outwardFrom: center
         )
         return try mesh.resource(named: "hairCrown")
     }
 
-    /// Hair: long curtain framing one side of the face (side = ±1).
+    /// Front curtain framing one side of the face, falling to mid-back.
     static func hairCurtain(side: Float) throws -> MeshResource {
+        let band: ClosedRange<Float> = side < 0 ? 0.03...0.45 : 0.55...0.97
         let mesh = GridMesh.build(
-            us: ramp(0, 1, 6),  // across the strand, inner → outer
-            vs: ramp(0, 1, 22),  // along its length, top → tip
+            us: ramp(0, 1, 7),  // across the fall, inner → outer
+            vs: ramp(0, 1, 26),  // along its length, root → tip
             point: { s, t in
-                let inner: Float = 0.055 + 0.052 * powf(t, 0.9)
-                let width: Float = 0.045 + 0.022 * t
+                let inner: Float = 0.052 + 0.060 * powf(t, 0.85)
+                let width: Float = 0.052 + 0.030 * t
                 let x = side * (inner + s * width)
-                let y = 0.150 - 0.50 * t + s * 0.004
-                let z = 0.050 - 0.018 * t - 0.038 * t * t - s * 0.022
+                let y = 0.152 - 0.52 * t + s * 0.004
+                let z = 0.052 - 0.022 * t - 0.048 * t * t - s * 0.026
                 return SIMD3(x, y, z)
             },
-            uv: { SIMD2($0, $1) }
+            uv: { s, t in
+                SIMD2(band.lowerBound + s * (band.upperBound - band.lowerBound), 1 - t)
+            }
         )
         return try mesh.resource(named: "curtain")
     }
 
-    /// Hair: soft sheet falling behind the shoulders.
-    static func hairBack() throws -> MeshResource {
+    /// Side fall between the curtain and the back sheet — fills the gap so
+    /// hair visibly drapes past the shoulders from the front.
+    static func hairFall(side: Float) throws -> MeshResource {
+        let band: ClosedRange<Float> = side < 0 ? 0.10...0.48 : 0.52...0.90
         let mesh = GridMesh.build(
-            us: ramp(-1, 1, 12),
-            vs: ramp(0, 1, 12),
-            point: { u, v in
-                let half: Float = 0.155 + 0.055 * v
-                let x = u * half
-                let y = 0.165 - 0.52 * v
-                let z: Float = -0.052 - 0.02 * sin(v * .pi * 0.5) + 0.03 * u * u
+            us: ramp(0, 1, 6),
+            vs: ramp(0, 1, 24),
+            point: { s, t in
+                let x = side * (0.062 + 0.020 * t + s * 0.048)
+                let y = 0.160 - 0.58 * t
+                let z: Float = -0.020 - 0.032 * t - s * 0.018
                 return SIMD3(x, y, z)
             },
-            uv: { SIMD2(($0 + 1) / 2, $1) }
+            uv: { s, t in
+                SIMD2(band.lowerBound + s * (band.upperBound - band.lowerBound), 1 - t)
+            }
+        )
+        return try mesh.resource(named: "hairFall")
+    }
+
+    /// Wide sheet down the back, past the chest bottom in tall framing.
+    static func hairBack() throws -> MeshResource {
+        let mesh = GridMesh.build(
+            us: ramp(-1, 1, 14),
+            vs: ramp(0, 1, 16),
+            point: { u, v in
+                let half: Float = 0.165 + 0.075 * v
+                let x = u * half
+                let y = 0.168 - 0.64 * v
+                let z: Float = -0.055 - 0.02 * sin(v * .pi * 0.5) + 0.032 * u * u
+                return SIMD3(x, y, z)
+            },
+            uv: { SIMD2(($0 + 1) / 2, 1 - $1) }
         )
         return try mesh.resource(named: "hairBack")
+    }
+
+    // MARK: - Expression patches
+    //
+    // Small shells that hug the face dome and render the exact portrait
+    // pixels they cover (pre-cropped, feather-edged textures) — invisible at
+    // rest, and tiny eased offsets read as living skin. Same person, same
+    // texture; nothing here swaps the face.
+
+    /// Baked crop rectangles — must match the PNGs generated from the portrait.
+    static let browLRect: (Float, Float, Float, Float) = (0.20, 0.47, 0.240, 0.335)
+    static let browRRect: (Float, Float, Float, Float) = (0.53, 0.80, 0.240, 0.335)
+    static let cornerLRect: (Float, Float, Float, Float) = (0.345, 0.475, 0.478, 0.600)
+    static let cornerRRect: (Float, Float, Float, Float) = (0.525, 0.655, 0.478, 0.600)
+    static let sneerRect: (Float, Float, Float, Float) = (0.41, 0.59, 0.430, 0.515)
+
+    /// Patch mesh over a texture-space rect, vertices relative to its center
+    /// pivot so rotation and scale happen about the region itself.
+    static func facePatch(
+        rect: (Float, Float, Float, Float),
+        proud: Float
+    ) throws -> (mesh: MeshResource, pivot: SIMD3<Float>) {
+        let (u0, u1, v0, v1) = rect
+        let pivot = FaceMap.point((u0 + u1) / 2, (v0 + v1) / 2) + SIMD3(0, 0, proud)
+        let mesh = GridMesh.build(
+            us: ramp(u0, u1, 8),
+            vs: ramp(v0, v1, 6),
+            point: { FaceMap.point($0, $1) + SIMD3(0, 0, proud) - pivot },
+            uv: { SIMD2(($0 - u0) / (u1 - u0), 1 - ($1 - v0) / (v1 - v0)) }
+        )
+        return (try mesh.resource(named: "patch"), pivot)
     }
 
     /// Merlot silk across the chest, vertices relative to its center so

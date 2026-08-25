@@ -25,6 +25,12 @@ final class AvatarDirector {
         var breathDepth = 1.0
         var chinBias = 0.0    // radians; negative = chin dipped, colder
         var blinkSpacing = 1.0
+        // Expression biases — they tilt continuous signals, never pick poses.
+        var browLift = 0.0    // + soft/open, − lowered/cold
+        var browArch = 0.4    // one-brow skepticism gain
+        var cornerSet = 0.0   // + warmth at the corners, − pulled down
+        var sneerGain = 0.2
+        var faceLife = 0.8    // micro-motion amplitude
     }
     private var mood = Mood()
 
@@ -55,6 +61,24 @@ final class AvatarDirector {
         interval: 12...30,
         shape: .init(rise: 1.2...2.2, hold: 2...6, release: 1.5...3)
     )
+    /// Quick eyebrow flash — one of the most human idle tells.
+    private var browFlash = MotionCue(
+        interval: 15...45,
+        shape: .init(rise: 0.12...0.2, hold: 0.1...0.3, release: 0.25...0.45)
+    )
+    /// A slow curl of contempt that rises and melts away, mood-gated.
+    private var sneerCue = MotionCue(
+        interval: 25...70,
+        shape: .init(rise: 0.4...0.7, hold: 0.5...1.5, release: 0.8...1.4)
+    )
+
+    // Expression drift — the face is never parked.
+    private var browDrift = Wander(range: -1...1, pace: 4...11)
+    private var browAsym = Wander(range: -1...1, pace: 7...16)
+    private var browKnit = Wander(range: 0...1, pace: 6...14)
+    private var cornerDrift = Wander(range: -1...1, pace: 5...12)
+    private var cornerAsym = Wander(range: -1...1, pace: 8...18)
+    private var sneerMicro = Wander(range: 0...1, pace: 7...15)
 
     // Output springs — nothing reaches the rig without passing through one.
     private var yawS = Damped()
@@ -76,11 +100,28 @@ final class AvatarDirector {
     private var camFov = Damped(22)
     private var focusY = Damped(0.045)
 
+    // Expression springs.
+    private var browLS = Damped()
+    private var browRS = Damped()
+    private var browLRollS = Damped()
+    private var browRRollS = Damped()
+    private var cornerLS = Damped()
+    private var cornerRS = Damped()
+    private var sneerS = Damped()
+
+    // Hair follow-through: one spring + one drift per hanging piece.
+    private var hairSprings: [Damped] = []
+    private var hairWanders: [Wander] = []
+
     private var breathPhase = 0.0
     private var previousLevel = 0.0
 
     init(rig: AvatarRig) {
         self.rig = rig
+        for _ in rig.hairPieces {
+            hairSprings.append(Damped())
+            hairWanders.append(Wander(range: -0.018...0.018, pace: 4...9))
+        }
     }
 
     /// Continuous mapping from her living emotional state — biases, not poses.
@@ -92,6 +133,11 @@ final class AvatarDirector {
         mood.breathDepth = 0.8 + 0.6 * e.intensity
         mood.chinBias = 0.03 * (e.warmth + e.devotion) / 2 - 0.045 * e.sadism - 0.02 * e.jealousy
         mood.blinkSpacing = 1 + 0.8 * e.intensity
+        mood.browLift = min(1, max(-1, 0.35 * e.warmth + 0.3 * e.vulnerability - 0.45 * e.sadism - 0.3 * e.jealousy))
+        mood.browArch = 0.25 + 0.6 * e.sadism
+        mood.cornerSet = min(1, max(-1, 0.6 * e.warmth + 0.45 * e.playfulness - 0.55 * e.melancholy - 0.4 * e.jealousy - 0.25 * e.sadism))
+        mood.sneerGain = min(1, 0.15 + 0.75 * (0.7 * e.sadism + 0.3 * e.jealousy))
+        mood.faceLife = 0.6 + 0.5 * e.playfulness + 0.25 * e.intensity
     }
 
     func tick(dt rawDt: Double) {
@@ -155,6 +201,68 @@ final class AvatarDirector {
         )
         lidS.track(min(1, lidTarget), dt: dt, tau: 0.045)
 
+        // --- Face: one continuous expression field, always in-between ---
+        // Brows: shared drift + mood set-point + occasional flash; the arch
+        // channel splits them (one-brow skepticism as her edge sharpens).
+        let life = mood.faceLife * (1 - 0.3 * talking)
+        let flash = browFlash.tick(dt)
+        let browBase = browDrift.tick(dt) * 0.35 * life + mood.browLift * 0.55 + flash * 0.9
+        let arch = browAsym.tick(dt) * mood.browArch
+        browLS.track(browBase + arch * 0.5, dt: dt, tau: 0.55)
+        browRS.track(browBase - arch * 0.5, dt: dt, tau: 0.60)
+        let knit = browKnit.tick(dt) * (0.25 + 0.5 * max(0, -mood.browLift))
+        browLRollS.track(-knit + arch * 0.2, dt: dt, tau: 0.7)
+        browRRollS.track(knit - arch * 0.2, dt: dt, tau: 0.7)
+
+        // Sneer: slow contempt that rises and melts, gated by her edge.
+        let sneerTarget = (sneerCue.tick(dt) + sneerMicro.tick(dt) * 0.25) * mood.sneerGain
+        sneerS.track(sneerTarget, dt: dt, tau: 0.4)
+
+        // Mouth corners: drift + mood set + a touch of engagement while she
+        // speaks; the sneer pulls one corner asymmetrically.
+        let cornerBase = cornerDrift.tick(dt) * 0.3 * life + mood.cornerSet * 0.5
+            + speakLevel.value * 0.3
+        let cornerSplit = cornerAsym.tick(dt) * 0.25 + sneerS.value * 0.3
+        cornerLS.track(cornerBase + cornerSplit, dt: dt, tau: 0.5)
+        cornerRS.track(cornerBase - cornerSplit, dt: dt, tau: 0.5)
+
+        applyPatch(rig.browL, lift: browLS.value * 0.0028, out: 0, roll: browLRollS.value * 0.07)
+        applyPatch(rig.browR, lift: browRS.value * 0.0028, out: 0, roll: browRRollS.value * 0.07)
+        applyPatch(
+            rig.cornerL,
+            lift: cornerLS.value * 0.0020,
+            out: -abs(cornerLS.value) * 0.0004,
+            roll: -cornerLS.value * 0.05
+        )
+        applyPatch(
+            rig.cornerR,
+            lift: cornerRS.value * 0.0020,
+            out: abs(cornerRS.value) * 0.0004,
+            roll: cornerRS.value * 0.05
+        )
+        applyPatch(
+            rig.sneer,
+            lift: sneerS.value * 0.0016,
+            out: 0,
+            roll: 0,
+            stretch: sneerS.value * 0.05
+        )
+
+        // --- Hair: lagged follow-through behind the head, plus its own drift ---
+        let headMotion = yawS.value * 0.5 + rollS.value * 0.9 + weightS.value * 5
+        for index in rig.hairPieces.indices {
+            let piece = rig.hairPieces[index]
+            let target = -headMotion * piece.follow + hairWanders[index].tick(dt)
+            hairSprings[index].track(target, dt: dt, tau: piece.tau)
+            let angle = hairSprings[index].value
+            piece.pivot.transform.rotation =
+                simd_quatf(angle: Float(angle), axis: [0, 0, 1])
+                * simd_quatf(
+                    angle: Float(angle * 0.3 + breathFollow.value * 0.004),
+                    axis: [1, 0, 0]
+                )
+        }
+
         // Mood tint eases too — the light never jumps between feelings.
         chillS.track(mood.chill, dt: dt, tau: 2.5)
         glowS.track(mood.glow, dt: dt, tau: 2.5)
@@ -194,5 +302,20 @@ final class AvatarDirector {
             from: SIMD3(Float(weightS.value * 0.3), Float(camY.value), Float(camZ.value)),
             relativeTo: nil
         )
+    }
+
+    /// Small eased offsets on a portrait patch — living skin, not a mask swap.
+    private func applyPatch(
+        _ patch: AvatarRig.FacePatch,
+        lift: Double,
+        out: Double,
+        roll: Double,
+        stretch: Double = 0
+    ) {
+        var transform = Transform()
+        transform.translation = patch.home + SIMD3(Float(out), Float(lift), 0)
+        transform.rotation = simd_quatf(angle: Float(roll), axis: [0, 0, 1])
+        transform.scale = SIMD3(1, Float(1 + stretch), 1)
+        patch.pivot.transform = transform
     }
 }
