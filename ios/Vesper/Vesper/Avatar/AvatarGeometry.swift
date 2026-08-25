@@ -11,21 +11,25 @@ import simd
 enum Stylized {
     /// Head profile keys, top → chin: (y, halfWidth, frontDepth, backDepth, n)
     /// where n is the superellipse exponent (higher = flatter cheeks/face).
+    /// Tuned against tools/face_preview.py — cheekbone-widest, then a smooth
+    /// continuous V-taper to a soft chin (no parallel sides, no jaw corners).
     private static let keys: [(y: Float, w: Float, dF: Float, dB: Float, n: Float)] = [
-        (0.096, 0.012, 0.012, 0.012, 2.0),   // crown
-        (0.080, 0.048, 0.052, 0.056, 2.0),
-        (0.055, 0.066, 0.064, 0.072, 2.1),
-        (0.025, 0.074, 0.069, 0.078, 2.2),   // brow / temple — widest
-        (-0.005, 0.075, 0.072, 0.076, 2.3),  // eye line — flat face plane
-        (-0.030, 0.070, 0.071, 0.070, 2.3),  // cheekbones
-        (-0.050, 0.055, 0.068, 0.058, 2.2),  // jaw sweep begins
-        (-0.070, 0.034, 0.063, 0.044, 2.1),
-        (-0.085, 0.016, 0.056, 0.028, 2.0),  // chin
-        (-0.092, 0.004, 0.046, 0.014, 2.0),  // under-chin
+        (0.096, 0.014, 0.014, 0.014, 2.0),    // crown
+        (0.082, 0.046, 0.050, 0.055, 2.0),
+        (0.058, 0.061, 0.062, 0.070, 2.1),
+        (0.030, 0.068, 0.067, 0.076, 2.2),    // temple
+        (0.000, 0.072, 0.071, 0.077, 2.3),    // eye line — flat face plane
+        (-0.028, 0.0725, 0.071, 0.071, 2.3),  // cheekbones (widest)
+        (-0.045, 0.065, 0.069, 0.062, 2.25),
+        (-0.058, 0.053, 0.067, 0.054, 2.2),
+        (-0.070, 0.039, 0.063, 0.044, 2.15),
+        (-0.080, 0.025, 0.058, 0.034, 2.05),
+        (-0.088, 0.013, 0.052, 0.024, 2.0),
+        (-0.093, 0.005, 0.044, 0.016, 2.0),   // soft chin
     ]
 
     static let yTop: Float = 0.096
-    static let yChin: Float = -0.092
+    static let yChin: Float = -0.093
 
     /// Interpolated profile at a given height.
     static func profile(y: Float) -> (w: Float, dF: Float, dB: Float, n: Float) {
@@ -72,7 +76,7 @@ enum Stylized {
         SIMD3(side * eyeSpacing, eyeY, frontZ(eyeY) + 0.001)
     }
 
-    static let mouthY: Float = -0.052
+    static let mouthY: Float = -0.050
     static let mouthAnchor = SIMD3<Float>(0, mouthY, frontZ(mouthY) + 0.0015)
     static let jawHinge = SIMD3<Float>(0, mouthY - 0.006, mouthAnchor.z - 0.048)
 
@@ -221,8 +225,8 @@ enum AvatarGeometry {
         return try mesh.resource(named: "head")
     }
 
-    /// Small, sharp stylized nose — reads in silhouette and shading, not as a
-    /// blob. Skin material; vertices relative to the head origin.
+    /// Tiny, sharp stylized nose — anime-small, reads in shading and 3/4
+    /// silhouette, never heavy from the front. Vertices in head space.
     static func nose() throws -> MeshResource {
         let mesh = GridMesh.build(
             us: ramp(-1, 1, 6),
@@ -230,13 +234,13 @@ enum AvatarGeometry {
             point: { s, t in
                 let down = min(t, 1.0)
                 let underside = max(0, t - 1.0)  // folds back under the tip
-                let y: Float = -0.006 - 0.024 * down - 0.003 * underside
-                let width: Float = 0.0045 * (0.35 + 0.65 * down)
-                let out: Float = 0.0078 * down * (1 - 0.4 * abs(s)) - 0.055 * underside
+                let y: Float = -0.012 - 0.016 * down - 0.003 * underside
+                let width: Float = 0.0030 * (0.35 + 0.65 * down)
+                let out: Float = 0.0060 * down * (1 - 0.4 * abs(s)) - 0.045 * underside
                 return SIMD3(
                     s * width,
                     y,
-                    Stylized.frontZ(y) - 0.0015 + out
+                    Stylized.frontZ(y) - 0.0012 + out
                 )
             },
             uv: { SIMD2(($0 + 1) / 2, $1 / 1.12) }
@@ -375,8 +379,8 @@ enum AvatarGeometry {
         func spine(_ t: Float) -> SIMD3<Float> {
             let rise = min(1, t / 0.66)
             let fall = max(0, (t - 0.66) / 0.34)
-            let y: Float = 0.0125 + 0.0105 * rise - 0.0095 * fall
-            let x = side * (0.014 + 0.048 * t)
+            let y: Float = 0.0125 + 0.0095 * rise - 0.0095 * fall
+            let x = side * (0.014 + 0.056 * t)
             return SIMD3(x, y, Stylized.frontZ(y) + 0.002 - 0.006 * max(0, t - 0.8))
         }
         let pivot = spine(0.45)
@@ -401,7 +405,7 @@ enum AvatarGeometry {
             us: ramp(0, 1, 14),
             vs: ramp(0, 1, 5),
             point: { t, s in
-                let x = side * 0.015 * t
+                let x = side * 0.018 * t
                 let lipline: Float = -0.0006 - 0.0012 * t * t
                 let edge: Float
                 if upper {
@@ -425,7 +429,7 @@ enum AvatarGeometry {
         let mesh = GridMesh.build(
             us: ramp(-1, 1, 8),
             vs: ramp(-1, 1, 4),
-            point: { SIMD3($0 * 0.016, $1 * 0.007 - 0.002, -0.004) },
+            point: { SIMD3($0 * 0.019, $1 * 0.007 - 0.002, -0.004) },
             uv: { SIMD2(($0 + 1) / 2, ($1 + 1) / 2) }
         )
         return try mesh.resource(named: "innerMouth")
@@ -512,8 +516,12 @@ enum AvatarGeometry {
             us: ramp(-.pi, .pi, 40),
             vs: ramp(0, 1, 12),
             point: { psi, s in
+                // Arced hairline: high at the center part, dipping at the
+                // temples, then sweeping down to the nape at the back.
+                let frontLine: Float = 0.048 - 0.018 * powf(min(abs(psi) / 0.8, 1), 1.6)
                 let k = clamp01((abs(psi) - 0.8) / 1.6)
-                let yMin: Float = 0.042 - 0.094 * (k * k * (3 - 2 * k))
+                let blend = k * k * (3 - 2 * k)
+                let yMin = frontLine * (1 - blend) + (-0.052) * blend
                 let y = 0.094 + (yMin - 0.094) * s
                 let p = Stylized.surface(psi, y)
                 let len = simd_length(p)
