@@ -36,11 +36,15 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: model.banner)
         .animation(.easeInOut(duration: 0.2), value: recorder.isRecording)
+        // Sheets are a new presentation tree — inject the model explicitly or
+        // their @EnvironmentObject lookup fatal-errors at presentation time.
         .sheet(isPresented: $showSettings) {
             SettingsView()
+                .environmentObject(model)
         }
         .sheet(isPresented: $showMood) {
             MoodSheet()
+                .environmentObject(model)
         }
         .task {
             await model.refreshLink()
