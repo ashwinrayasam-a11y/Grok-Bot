@@ -2,11 +2,42 @@ import Foundation
 import RealityKit
 import UIKit
 
-/// Vesper's stylized bust, v2: swept-profile skull with a real V-jaw, layered
-/// graphic eyes (almond sclera, translating iris discs with catch-lights,
-/// bold winged liner), filled merlot lips, and framing hair. Original design —
-/// colors keyed to the locked reference, no photo textures, no borrowed
-/// companions.
+/// Per-member styling for the shared stylized rig: textures, tints, hair cut,
+/// and stage-light colors. Vesper and Mika share bones, never a look.
+struct AvatarStyle {
+    var hairTexture: String
+    var irisTexture: String
+    var lipTint: UIColor
+    var browTint: UIColor
+    var keyWarm: UIColor   // key light at ease
+    var keyCool: UIColor   // key light as the mood sharpens
+    var bob: Bool          // jaw-length bob + fringe instead of mid-back falls
+
+    static let vesper = AvatarStyle(
+        hairTexture: "VesperHair",
+        irisTexture: "VesperIris",
+        lipTint: UIColor(red: 0.73, green: 0.50, blue: 0.49, alpha: 1),
+        browTint: UIColor(red: 0.243, green: 0.180, blue: 0.141, alpha: 1),
+        keyWarm: UIColor(red: 0.77, green: 0.36, blue: 0.15, alpha: 1),
+        keyCool: UIColor(red: 0.66, green: 0.30, blue: 0.30, alpha: 1),
+        bob: false
+    )
+
+    static let mika = AvatarStyle(
+        hairTexture: "MikaHair",
+        irisTexture: "MikaIris",
+        lipTint: UIColor(red: 0.80, green: 0.47, blue: 0.43, alpha: 1),
+        browTint: UIColor(red: 0.15, green: 0.13, blue: 0.11, alpha: 1),
+        keyWarm: UIColor(red: 0.28, green: 0.74, blue: 0.71, alpha: 1),
+        keyCool: UIColor(red: 0.32, green: 0.48, blue: 0.66, alpha: 1),
+        bob: true
+    )
+}
+
+/// A stylized bust: swept-profile skull with a real V-jaw, layered graphic
+/// eyes (almond sclera, translating iris discs with catch-lights, bold winged
+/// liner), filled lips, and framing hair. Original design — no photo
+/// textures, no borrowed companions. The style struct dresses it per member.
 final class AvatarRig {
     struct HairPiece {
         let pivot: Entity
@@ -50,12 +81,14 @@ final class AvatarRig {
     /// Silk camisole rest position — the director breathes it around this.
     static let chestHome = SIMD3<Float>(0, -0.15, 0)
 
-    private static let ember = UIColor(red: 0.77, green: 0.36, blue: 0.15, alpha: 1)
-    private static let rose = UIColor(red: 0.66, green: 0.30, blue: 0.30, alpha: 1)
+    private let keyWarm: UIColor
+    private let keyCool: UIColor
 
-    init() throws {
-        let irisTexture = try TextureResource.load(named: "VesperIris")
-        let hairTexture = try TextureResource.load(named: "VesperHair")
+    init(style: AvatarStyle = .vesper) throws {
+        keyWarm = style.keyWarm
+        keyCool = style.keyCool
+        let irisTexture = try TextureResource.load(named: style.irisTexture)
+        let hairTexture = try TextureResource.load(named: style.hairTexture)
 
         // --- Materials (colors keyed to the blonde look target) ---
         var skin = PhysicallyBasedMaterial()
@@ -84,8 +117,8 @@ final class AvatarRig {
         makeup.metallic = 0.0
         makeup.faceCulling = .none
 
-        var browTint = PhysicallyBasedMaterial()  // taupe-brown, sharper than black
-        browTint.baseColor = .init(tint: UIColor(red: 0.243, green: 0.180, blue: 0.141, alpha: 1))
+        var browTint = PhysicallyBasedMaterial()
+        browTint.baseColor = .init(tint: style.browTint)
         browTint.roughness = 0.42
         browTint.metallic = 0.0
         browTint.faceCulling = .none
@@ -96,8 +129,8 @@ final class AvatarRig {
         lidShadow.metallic = 0.0
         lidShadow.faceCulling = .none
 
-        var lip = PhysicallyBasedMaterial()  // mauve / dusty rose
-        lip.baseColor = .init(tint: UIColor(red: 0.73, green: 0.50, blue: 0.49, alpha: 1))
+        var lip = PhysicallyBasedMaterial()
+        lip.baseColor = .init(tint: style.lipTint)
         lip.roughness = 0.30
         lip.metallic = 0.0
         lip.sheen = .init(tint: UIColor(red: 0.86, green: 0.66, blue: 0.64, alpha: 1))
@@ -192,16 +225,22 @@ final class AvatarRig {
 
         // --- Hair on the head ---
         head.addChild(ModelEntity(mesh: try AvatarGeometry.hairScalp(), materials: [hair]))
+        let curtainLength: Float = style.bob ? 0.185 : 0.52
         let curtainL = Self.pivoted(
-            try AvatarGeometry.hairCurtain(side: -1), material: hair,
+            try AvatarGeometry.hairCurtain(side: -1, length: curtainLength, drape: !style.bob),
+            material: hair,
             at: SIMD3(-0.048, 0.062, 0.006)
         )
         let curtainR = Self.pivoted(
-            try AvatarGeometry.hairCurtain(side: 1), material: hair,
+            try AvatarGeometry.hairCurtain(side: 1, length: curtainLength, drape: !style.bob),
+            material: hair,
             at: SIMD3(0.048, 0.062, 0.006)
         )
         head.addChild(curtainL)
         head.addChild(curtainR)
+        if style.bob {
+            head.addChild(ModelEntity(mesh: try AvatarGeometry.hairFringe(), materials: [hair]))
+        }
 
         // Head content sits above the neck joint.
         let neckJoint = SIMD3<Float>(0, -0.045, -0.008)
@@ -217,27 +256,40 @@ final class AvatarRig {
         let strapL = ModelEntity(mesh: try AvatarGeometry.silkStrap(side: -1), materials: [silk])
         let strapR = ModelEntity(mesh: try AvatarGeometry.silkStrap(side: 1), materials: [silk])
 
-        let fallL = Self.pivoted(
-            try AvatarGeometry.hairFall(side: -1), material: hair, at: SIMD3(-0.10, 0.10, -0.055)
-        )
-        let fallR = Self.pivoted(
-            try AvatarGeometry.hairFall(side: 1), material: hair, at: SIMD3(0.10, 0.10, -0.055)
-        )
-        let back = Self.pivoted(
-            try AvatarGeometry.hairBack(), material: hair, at: SIMD3(0, 0.12, -0.072)
-        )
+        if style.bob {
+            // Short bob skirt behind the head; moves with it.
+            let bobBack = Self.pivoted(
+                try AvatarGeometry.hairBack(topY: 0.05, drop: 0.20, half: 0.10, z: -0.058),
+                material: hair, at: SIMD3(0, 0.05, -0.058)
+            )
+            head.addChild(bobBack)
+            hairPieces = [
+                HairPiece(pivot: curtainL, follow: 0.50, tau: 0.40),
+                HairPiece(pivot: curtainR, follow: 0.55, tau: 0.44),
+                HairPiece(pivot: bobBack, follow: 0.35, tau: 0.60),
+            ]
+        } else {
+            let fallL = Self.pivoted(
+                try AvatarGeometry.hairFall(side: -1), material: hair, at: SIMD3(-0.10, 0.10, -0.055)
+            )
+            let fallR = Self.pivoted(
+                try AvatarGeometry.hairFall(side: 1), material: hair, at: SIMD3(0.10, 0.10, -0.055)
+            )
+            let back = Self.pivoted(
+                try AvatarGeometry.hairBack(), material: hair, at: SIMD3(0, 0.12, -0.072)
+            )
+            hairPieces = [
+                HairPiece(pivot: curtainL, follow: 0.40, tau: 0.50),
+                HairPiece(pivot: curtainR, follow: 0.45, tau: 0.55),
+                HairPiece(pivot: fallL, follow: 0.30, tau: 0.72),
+                HairPiece(pivot: fallR, follow: 0.35, tau: 0.78),
+                HairPiece(pivot: back, follow: 0.25, tau: 0.95),
+            ]
+            torso.addChild(back)
+            torso.addChild(fallL)
+            torso.addChild(fallR)
+        }
 
-        hairPieces = [
-            HairPiece(pivot: curtainL, follow: 0.40, tau: 0.50),
-            HairPiece(pivot: curtainR, follow: 0.45, tau: 0.55),
-            HairPiece(pivot: fallL, follow: 0.30, tau: 0.72),
-            HairPiece(pivot: fallR, follow: 0.35, tau: 0.78),
-            HairPiece(pivot: back, follow: 0.25, tau: 0.95),
-        ]
-
-        torso.addChild(back)
-        torso.addChild(fallL)
-        torso.addChild(fallR)
         torso.addChild(figure)
         torso.addChild(chest)
         torso.addChild(strapL)
@@ -246,12 +298,12 @@ final class AvatarRig {
         root.addChild(torso)
 
         // --- Stage: lights + camera ---
-        keyLight.light.color = Self.ember
+        keyLight.light.color = keyWarm
         keyLight.light.intensity = 16000
         keyLight.light.attenuationRadius = 4
         keyLight.position = [0.28, 0.18, 0.5]
 
-        rimLight.light.color = Self.rose
+        rimLight.light.color = keyCool
         rimLight.light.intensity = 9000
         rimLight.light.attenuationRadius = 4
         rimLight.position = [-0.35, 0.25, -0.35]
@@ -272,7 +324,7 @@ final class AvatarRig {
     }
 
     func tintLights(chill: Double, glow: Double) {
-        keyLight.light.color = Self.blend(Self.ember, Self.rose, Float(chill))
+        keyLight.light.color = Self.blend(keyWarm, keyCool, Float(chill))
         keyLight.light.intensity = Float(12000 + glow * 9000)
         rimLight.light.intensity = Float(6000 + chill * 7000)
     }

@@ -16,6 +16,13 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var audioSeconds: Double?
     var date: Date
     var isError: Bool
+    /// True while tokens are still landing — rows render plain text (no
+    /// markdown parse per token) until the reply completes. Not persisted.
+    var isStreaming: Bool = false
+
+    private enum CodingKeys: String, CodingKey {
+        case id, role, text, audio, audioClips, audioSeconds, date, isError
+    }
 
     init(
         role: Role,
@@ -88,22 +95,26 @@ struct SoulSnapshot: Codable {
 }
 
 enum SoulStore {
-    private static var fileURL: URL? {
+    private static func fileURL(for member: CastMember) -> URL? {
         guard
             let base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask
             ).first
         else { return nil }
-        return base.appendingPathComponent("Vesper/soul.json")
+        return base.appendingPathComponent("Vesper/soul-\(member.rawValue).json")
     }
 
-    static func load() -> SoulSnapshot? {
-        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return nil }
+    static func load(for member: CastMember) -> SoulSnapshot? {
+        guard let url = fileURL(for: member), let data = try? Data(contentsOf: url) else {
+            return nil
+        }
         return try? JSONDecoder().decode(SoulSnapshot.self, from: data)
     }
 
-    static func save(_ snapshot: SoulSnapshot) {
-        guard let url = fileURL else { return }
+    /// Synchronous file write — call it off the main actor (encoding voice
+    /// clips to base64 is the heavy part and used to hitch the UI).
+    static func save(_ snapshot: SoulSnapshot, for member: CastMember) {
+        guard let url = fileURL(for: member) else { return }
         var snap = snapshot
         // Keep the file light: cap history, keep voice data only for recent replies.
         snap.messages = Array(snap.messages.suffix(200))
@@ -126,8 +137,8 @@ enum SoulStore {
         }
     }
 
-    static func wipe() {
-        guard let url = fileURL else { return }
+    static func wipe(for member: CastMember) {
+        guard let url = fileURL(for: member) else { return }
         try? FileManager.default.removeItem(at: url)
     }
 }

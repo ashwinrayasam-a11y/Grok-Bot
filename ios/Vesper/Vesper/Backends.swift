@@ -42,6 +42,11 @@ struct MacChatRequest: Encodable {
     var intensity: Double
     var wantAudio: Bool
     var temperature: Double = 0.92
+    /// Cast support: bespoke prompt for non-Vesper members; `plain` skips the
+    /// emotion pipeline server-side; `voice` picks the TTS voice per member.
+    var personaOverride: String?
+    var plain: Bool = false
+    var voice: String?
 }
 
 struct MacChatResponse: Decodable {

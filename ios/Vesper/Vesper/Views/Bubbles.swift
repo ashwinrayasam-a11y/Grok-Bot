@@ -1,101 +1,119 @@
 import SwiftUI
 
-struct MessageBubble: View {
-    @EnvironmentObject private var model: ChatViewModel
-    let message: ChatMessage
+/// Rendered-markdown cache: parse a reply exactly once when it completes,
+/// never per token, never per body evaluation. (Session-scoped; tiny.)
+@MainActor
+enum MarkdownStore {
+    private static var cache: [UUID: (length: Int, text: AttributedString)] = [:]
 
-    var body: some View {
-        HStack {
-            if message.role == .user {
-                Spacer(minLength: 48)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                if message.role == .assistant, message.hasVoice {
-                    VoiceBar(message: message)
-                }
-                Text(rendered)
-                    .font(.subheadline)
-                    .lineSpacing(3)
-                    .foregroundStyle(message.isError ? VesperTheme.mute : VesperTheme.ink)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(shape.fill(fill))
-            .overlay(shape.stroke(stroke, lineWidth: 1))
-            if message.role == .assistant {
-                Spacer(minLength: 48)
-            }
+    static func rendered(for message: ChatMessage) -> AttributedString {
+        if let hit = cache[message.id], hit.length == message.text.count {
+            return hit.text
         }
-    }
-
-    /// Inline markdown (her *emphasis*) with newlines preserved.
-    private var rendered: AttributedString {
-        (try? AttributedString(
+        let parsed = (try? AttributedString(
             markdown: message.text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(message.text)
+        cache[message.id] = (message.text.count, parsed)
+        return parsed
     }
 
-    private var shape: UnevenRoundedRectangle {
-        message.role == .user
-            ? UnevenRoundedRectangle(
-                topLeadingRadius: 20, bottomLeadingRadius: 20,
-                bottomTrailingRadius: 20, topTrailingRadius: 6, style: .continuous
-            )
-            : UnevenRoundedRectangle(
-                topLeadingRadius: 6, bottomLeadingRadius: 20,
-                bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous
-            )
-    }
-
-    private var fill: AnyShapeStyle {
-        if message.role == .user {
-            return AnyShapeStyle(
-                LinearGradient(
-                    colors: [VesperTheme.ember.opacity(0.30), VesperTheme.rose.opacity(0.22)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-        }
-        return AnyShapeStyle(VesperTheme.panel.opacity(0.92))
-    }
-
-    private var stroke: Color {
-        if message.isError { return VesperTheme.rose.opacity(0.5) }
-        return message.role == .user ? VesperTheme.ember.opacity(0.35) : VesperTheme.line
+    static func clear() {
+        cache.removeAll()
     }
 }
 
-/// Her voice. It plays itself when the reply lands; tap to hear it again
-/// from the start. No play/pause, no scrubber — just her speaking.
-struct VoiceBar: View {
-    @EnvironmentObject private var model: ChatViewModel
+/// One message. Equatable so streaming one bubble never re-renders the rest —
+/// the closure is excluded from equality on purpose.
+struct MessageRow: View, Equatable {
     let message: ChatMessage
+    let isPlaying: Bool
+    let accent: Color
+    let onReplay: () -> Void
 
-    private var isPlaying: Bool {
-        model.voice.playingID == message.id
+    static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+        lhs.message == rhs.message
+            && lhs.isPlaying == rhs.isPlaying
+            && lhs.accent == rhs.accent
     }
 
     var body: some View {
-        Button {
-            model.voice.replay(message)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(VesperTheme.ember)
-                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: isPlaying)
-                EqualizerBars(active: isPlaying)
-                if let seconds = message.audioSeconds {
-                    Text(Self.timestamp(seconds))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(VesperTheme.mute)
+        if message.role == .user {
+            userRow
+        } else {
+            assistantRow
+        }
+    }
+
+    /// User: a quiet pill, right-aligned — ChatGPT/Grok grammar.
+    private var userRow: some View {
+        HStack {
+            Spacer(minLength: 64)
+            Text(message.text)
+                .font(.body)
+                .lineSpacing(4)
+                .foregroundStyle(VesperTheme.ink)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.07))
+                )
+        }
+    }
+
+    /// Assistant: free text on the canvas — no bubble chrome at all.
+    private var assistantRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if message.hasVoice {
+                VoiceChip(
+                    isPlaying: isPlaying,
+                    seconds: message.audioSeconds,
+                    accent: accent,
+                    action: onReplay
+                )
+            }
+            Group {
+                if message.isStreaming {
+                    Text(verbatim: message.text)
+                } else {
+                    Text(MarkdownStore.rendered(for: message))
                 }
             }
+            .font(.body)
+            .lineSpacing(5)
+            .foregroundStyle(message.isError ? VesperTheme.mute : VesperTheme.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.trailing, 40)
+    }
+}
+
+/// Minimal voice affordance: tap to replay from the start. No transport.
+struct VoiceChip: View {
+    let isPlaying: Bool
+    let seconds: Double?
+    let accent: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 11, weight: .semibold))
+                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: isPlaying)
+                if let seconds {
+                    Text(Self.timestamp(seconds))
+                        .font(.caption2.monospacedDigit())
+                }
+            }
+            .foregroundStyle(isPlaying ? accent : VesperTheme.mute)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.white.opacity(0.06)))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isPlaying ? "Her voice, speaking" : "Replay her voice")
+        .accessibilityLabel(isPlaying ? "Speaking" : "Replay voice")
     }
 
     private static func timestamp(_ seconds: Double) -> String {
@@ -104,109 +122,50 @@ struct VoiceBar: View {
     }
 }
 
-struct EqualizerBars: View {
-    var active: Bool
-    @State private var phase = false
-
-    private let low: [CGFloat] = [7, 11, 17, 9, 13]
-    private let high: [CGFloat] = [15, 21, 9, 19, 7]
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<5, id: \.self) { index in
-                Capsule()
-                    .fill(VesperTheme.ember.opacity(active ? 0.85 : 0.35))
-                    .frame(width: 3, height: active ? (phase ? high[index] : low[index]) : 6)
-            }
-        }
-        .frame(height: 22)
-        .animation(
-            active ? .easeInOut(duration: 0.35).repeatForever(autoreverses: true) : .default,
-            value: phase
-        )
-        .onAppear { phase = active }
-        .onChange(of: active) { phase = active }
-    }
-}
-
-/// She's turning it over.
-struct ThinkingBubble: View {
+/// Three quiet dots while the reply forms.
+struct ThinkingDots: View {
+    let accent: Color
     @State private var on = false
 
     var body: some View {
-        HStack {
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(VesperTheme.ember.opacity(0.8))
-                        .frame(width: 6, height: 6)
-                        .opacity(on ? 1 : 0.25)
-                        .animation(
-                            .easeInOut(duration: 0.6)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(index) * 0.2),
-                            value: on
-                        )
-                }
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(accent.opacity(0.7))
+                    .frame(width: 5, height: 5)
+                    .opacity(on ? 1 : 0.2)
+                    .animation(
+                        .easeInOut(duration: 0.55)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(index) * 0.18),
+                        value: on
+                    )
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 6, bottomLeadingRadius: 20,
-                    bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous
-                )
-                .fill(VesperTheme.panel.opacity(0.92))
-            )
-            Spacer(minLength: 48)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { on = true }
     }
 }
 
-/// Home / Away / unreachable indicator.
-struct ModeChip: View {
-    let mode: LinkMode
+/// Bespoke empty state per cast member.
+struct CastEmptyState: View {
+    let cast: CastMember
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 7, height: 7)
-            Text(mode.label)
-                .font(.caption2.weight(.medium))
+        VStack(spacing: 10) {
+            Text(cast.emptyTitle)
+                .font(
+                    cast == .chat
+                        ? .system(.title3, weight: .medium)
+                        : VesperTheme.display(22, weight: .medium)
+                )
+                .foregroundStyle(VesperTheme.ink.opacity(0.9))
+            Text(cast.emptyLine)
+                .font(.subheadline)
                 .foregroundStyle(VesperTheme.mute)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(VesperTheme.panel))
-        .overlay(Capsule().stroke(VesperTheme.line, lineWidth: 1))
-    }
-
-    private var dotColor: Color {
-        switch mode {
-        case .home: return VesperTheme.ember
-        case .away: return VesperTheme.rose
-        case .offline: return .gray
-        case .checking: return VesperTheme.mute
-        }
-    }
-}
-
-struct BannerView: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.footnote)
-            .foregroundStyle(VesperTheme.ink)
-            .lineLimit(3)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                Capsule().fill(VesperTheme.rose.opacity(0.92))
-            )
-            .padding(.horizontal, 24)
-            .padding(.top, 6)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 48)
     }
 }

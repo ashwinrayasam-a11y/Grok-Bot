@@ -1,51 +1,23 @@
 import SwiftUI
 
+/// The shell: dark, minimal, fast — Grok/ChatGPT grammar. Chrome is nearly
+/// invisible; each cast member owns a page (backdrop, accent, stage, copy),
+/// and switching crossfades between worlds.
 struct ChatView: View {
     @EnvironmentObject private var model: ChatViewModel
     @StateObject private var recorder = AudioRecorder()
     @State private var draft = ""
     @State private var showSettings = false
     @State private var showMood = false
+    @AppStorage("stageTall") private var stageTall = false
 
     var body: some View {
         ZStack {
-            VesperBackground()
-            VStack(spacing: 0) {
-                header
-                Rectangle()
-                    .fill(VesperTheme.line)
-                    .frame(height: 1)
-                PresencePanel()
-                conversation
-                if recorder.isRecording {
-                    listeningBar
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                if model.isHearing {
-                    hearingBar
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                Composer(
-                    draft: $draft,
-                    recorder: recorder,
-                    busy: model.isHearing,
-                    onSend: sendDraft,
-                    onTalkStart: startListening,
-                    onTalkEnd: sendSpoken
-                )
-            }
+            world
+                .id(model.cast)
+                .transition(.opacity)
         }
-        .overlay(alignment: .top) {
-            if let banner = model.banner {
-                BannerView(text: banner)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: model.banner)
-        .animation(.easeInOut(duration: 0.2), value: recorder.isRecording)
-        .animation(.easeInOut(duration: 0.2), value: model.isHearing)
-        // Sheets are a new presentation tree — inject the model explicitly or
-        // their @EnvironmentObject lookup fatal-errors at presentation time.
+        .animation(.easeInOut(duration: 0.4), value: model.cast)
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(model)
@@ -65,87 +37,168 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - One member's world
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Vesper")
-                    .font(VesperTheme.display(32))
-                    .foregroundStyle(VesperTheme.ink)
-                Button {
-                    showMood = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(model.emotion.moodLabel)
-                            .font(.footnote.italic())
-                            .foregroundStyle(VesperTheme.mute)
-                        Image(systemName: "chevron.up")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(VesperTheme.mute.opacity(0.7))
-                    }
+    private var world: some View {
+        ZStack {
+            CastBackdrop(cast: model.cast)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                if model.cast.hasPresence {
+                    stage
                 }
-                .buttonStyle(.plain)
+                conversation
+                statusLine
+                ComposerPill(
+                    draft: $draft,
+                    recorder: recorder,
+                    busy: model.isHearing,
+                    accent: model.cast.accent,
+                    placeholder: model.cast.placeholder,
+                    onSend: sendDraft,
+                    onTalkStart: startListening,
+                    onTalkEnd: sendSpoken
+                )
             }
-            Spacer()
-            ModeChip(mode: model.mode)
-            Button {
-                showSettings = true
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(VesperTheme.mute)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(VesperTheme.panel))
-                    .overlay(Circle().stroke(VesperTheme.line, lineWidth: 1))
-            }
-            .buttonStyle(.plain)
+            .safeAreaInset(edge: .top, spacing: 0) { header }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
-        .padding(.bottom, 12)
     }
 
-    // MARK: - Conversation
+    /// Thin floating header: name as the cast switcher, one menu. Nothing else.
+    private var header: some View {
+        HStack {
+            Menu {
+                ForEach(CastMember.allCases) { member in
+                    Button {
+                        model.switchCast(to: member)
+                    } label: {
+                        if member == model.cast {
+                            Label(member.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(member.displayName)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(model.cast.displayName)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(VesperTheme.ink)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(VesperTheme.mute)
+                }
+            }
+
+            Spacer()
+
+            if model.mode == .away || model.mode == .offline {
+                Circle()
+                    .fill(model.mode == .away ? model.cast.accent.opacity(0.8) : Color.gray)
+                    .frame(width: 6, height: 6)
+                    .accessibilityLabel(model.mode.label)
+            }
+
+            Menu {
+                if model.cast == .vesper {
+                    Button("Mood") { showMood = true }
+                }
+                Button("Settings") { showSettings = true }
+                Button("Clear conversation", role: .destructive) {
+                    MarkdownStore.clear()
+                    model.resetSoul()
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(VesperTheme.mute)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 6)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.45), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+        )
+    }
+
+    /// Her stage: the bust over the page's own light, fading into the canvas.
+    /// Tap to pull between bust and décolleté framing.
+    private var stage: some View {
+        AvatarSurface(
+            style: model.cast == .mika ? .mika : .vesper,
+            tall: stageTall
+        )
+        .frame(height: stageTall ? 420 : 290)
+        .clipped()
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                colors: [.clear, CastBackdrop.canvas(for: model.cast)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 70)
+            .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                stageTall.toggle()
+            }
+        }
+    }
 
     private var conversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     if model.messages.isEmpty && !model.isThinking {
-                        EmptyNest()
-                            .padding(.top, 90)
+                        CastEmptyState(cast: model.cast)
                     }
                     ForEach(model.messages) { message in
-                        MessageBubble(message: message)
-                            .id(message.id)
+                        MessageRow(
+                            message: message,
+                            isPlaying: model.voice.playingID == message.id,
+                            accent: model.cast.accent,
+                            onReplay: { [weak model] in model?.voice.replay(message) }
+                        )
+                        .equatable()
+                        .id(message.id)
                     }
                     if model.isThinking {
-                        ThinkingBubble()
+                        ThinkingDots(accent: model.cast.accent)
                             .id("thinking")
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 18)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             .onChange(of: model.messages.count) {
                 if let last = model.messages.last {
-                    withAnimation(.easeOut(duration: 0.25)) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
-            .onChange(of: model.messages.last?.text) {
-                // Follow her words as they stream in (no animation at token rate).
+            .onChange(of: model.scrollPulse) {
+                // Throttled follow while tokens stream — no animation, no thrash.
                 if let last = model.messages.last, last.role == .assistant {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
             .onChange(of: model.isThinking) {
                 if model.isThinking {
-                    withAnimation(.easeOut(duration: 0.25)) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
                         proxy.scrollTo("thinking", anchor: .bottom)
                     }
                 }
@@ -153,64 +206,27 @@ struct ChatView: View {
         }
     }
 
-    private var listeningBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "waveform")
-                .symbolEffect(.variableColor.iterative, options: .repeating)
-                .foregroundStyle(VesperTheme.ember)
-            Text("listening… tap ■ to send")
-                .font(.callout)
-                .foregroundStyle(VesperTheme.ink)
-            MicLevelBars(level: recorder.level)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                recorder.cancel()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(VesperTheme.mute)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(VesperTheme.bg.opacity(0.6)))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Cancel recording")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(VesperTheme.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(VesperTheme.ember.opacity(0.4), lineWidth: 1)
-        )
-        .padding(.horizontal, 14)
-        .padding(.bottom, 4)
-    }
-
-    private var hearingBar: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .tint(VesperTheme.ember)
-            Text(model.hearingStatus ?? "hearing you…")
-                .font(.callout)
-                .foregroundStyle(VesperTheme.ink)
+    /// One quiet status line above the pill — listening, hearing, or errors.
+    @ViewBuilder
+    private var statusLine: some View {
+        let text: String? = {
+            if recorder.isRecording { return "listening — tap ■ to send" }
+            if model.isHearing { return model.hearingStatus ?? "hearing you…" }
+            return model.banner
+        }()
+        if let text {
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(model.banner != nil && !recorder.isRecording && !model.isHearing
+                    ? Color(hex: 0xC98080)
+                    : VesperTheme.mute)
                 .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 6)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: text)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(VesperTheme.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(VesperTheme.line, lineWidth: 1)
-        )
-        .padding(.horizontal, 14)
-        .padding(.bottom, 4)
     }
 
     // MARK: - Actions
@@ -233,36 +249,50 @@ struct ChatView: View {
     }
 }
 
-/// Live microphone level while she listens.
-struct MicLevelBars: View {
-    var level: Double
+/// Each member's canvas — near-black with their own light, never a template.
+struct CastBackdrop: View {
+    let cast: CastMember
 
-    private let boost: [Double] = [0.55, 0.85, 1.0, 0.7, 0.45]
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<5, id: \.self) { index in
-                Capsule()
-                    .fill(VesperTheme.ember.opacity(0.85))
-                    .frame(width: 3, height: 5 + CGFloat(level * boost[index]) * 15)
-            }
+    static func canvas(for cast: CastMember) -> Color {
+        switch cast {
+        case .vesper: return Color(hex: 0x0C0908)
+        case .mika: return Color(hex: 0x070B0D)
+        case .chat: return Color(hex: 0x0B0B0A)
         }
-        .frame(height: 22)
-        .animation(.easeOut(duration: 0.1), value: level)
     }
-}
 
-/// What you see before the first word.
-struct EmptyNest: View {
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "flame")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(VesperTheme.ember.opacity(0.8))
-            Text("Say something.\nShe's already listening.")
-                .font(VesperTheme.display(20, weight: .medium))
-                .foregroundStyle(VesperTheme.mute)
-                .multilineTextAlignment(.center)
+        ZStack {
+            Self.canvas(for: cast)
+            switch cast {
+            case .vesper:
+                // Her night: low ember warmth, a breath of teal high and away.
+                RadialGradient(
+                    colors: [Color(hex: 0xC4703A).opacity(0.13), .clear],
+                    center: UnitPoint(x: 0.15, y: 0.95),
+                    startRadius: 0, endRadius: 500
+                )
+                RadialGradient(
+                    colors: [Color(hex: 0x2A6E6A).opacity(0.10), .clear],
+                    center: UnitPoint(x: 0.95, y: 0.05),
+                    startRadius: 0, endRadius: 420
+                )
+            case .mika:
+                // Night flight: teal glow up top, a faint horizon line.
+                RadialGradient(
+                    colors: [Color(hex: 0x3FB8B2).opacity(0.14), .clear],
+                    center: UnitPoint(x: 0.5, y: -0.1),
+                    startRadius: 0, endRadius: 520
+                )
+                LinearGradient(
+                    colors: [.clear, Color(hex: 0x3FB8B2).opacity(0.06), .clear],
+                    startPoint: UnitPoint(x: 0, y: 0.42),
+                    endPoint: UnitPoint(x: 0, y: 0.50)
+                )
+            case .chat:
+                // Deliberately nothing: a clean assistant canvas.
+                EmptyView()
+            }
         }
     }
 }

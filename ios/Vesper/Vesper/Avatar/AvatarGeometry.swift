@@ -557,7 +557,11 @@ enum AvatarGeometry {
     /// forward OVER the shoulders and bust by tracking the torso profile, the
     /// way long hair actually rests on a chest. Frames the face; never veils.
     /// Built in head space (head center sits at world y +0.055).
-    static func hairCurtain(side: Float) throws -> MeshResource {
+    static func hairCurtain(
+        side: Float,
+        length: Float = 0.52,
+        drape: Bool = true
+    ) throws -> MeshResource {
         let band: ClosedRange<Float> = side < 0 ? 0.03...0.45 : 0.55...0.97
         let mesh = GridMesh.build(
             us: ramp(0, 1, 6),
@@ -565,15 +569,15 @@ enum AvatarGeometry {
             point: { s, t in
                 let inner: Float = 0.048 + 0.026 * powf(t, 0.9)
                 let width: Float = 0.038 + 0.024 * t
-                let y: Float = 0.062 - 0.52 * t + s * 0.003
+                let y: Float = 0.062 - length * t + s * 0.003
                 let worldY = y + 0.055
                 var z: Float = 0.006 - 0.018 * t - 0.024 * t * t - s * 0.020
-                if worldY < -0.06 {
+                if drape, worldY < -0.06 {
                     // Ride the chest: torso front + clearance, blended in.
                     let k = min(1, (-worldY - 0.06) / 0.035)
                     let blend = k * k * (3 - 2 * k)
-                    let drape = Stylized.torsoFrontZ(worldY) + 0.007 - s * 0.004
-                    z = z * (1 - blend) + drape * blend
+                    let drapeZ = Stylized.torsoFrontZ(worldY) + 0.007 - s * 0.004
+                    z = z * (1 - blend) + drapeZ * blend
                 }
                 return SIMD3(side * (inner + s * width), y, z)
             },
@@ -582,6 +586,25 @@ enum AvatarGeometry {
             }
         )
         return try mesh.resource(named: "curtain")
+    }
+
+    /// Straight bangs hugging the forehead — Mika's fringe. Ends just above
+    /// the brows (never over the eyes), ragged via the texture's tip zone.
+    static func hairFringe() throws -> MeshResource {
+        let mesh = GridMesh.build(
+            us: ramp(-1, 1, 14),
+            vs: ramp(0, 1, 6),
+            point: { u, t in
+                let y: Float = 0.046 - 0.024 * t
+                return SIMD3(
+                    u * 0.052 * (1 + 0.08 * t),
+                    y,
+                    Stylized.frontZ(y) + 0.0045 - 0.12 * abs(u) * abs(u) * 0.06
+                )
+            },
+            uv: { u, t in SIMD2((u + 1) / 2, 1 - (0.60 + 0.38 * t)) }
+        )
+        return try mesh.resource(named: "fringe")
     }
 
     /// Side fall behind the shoulders (torso space) — outside the new
@@ -605,18 +628,23 @@ enum AvatarGeometry {
         return try mesh.resource(named: "hairFall")
     }
 
-    /// Wide sheet down the back to mid-back (torso space) — a dark backdrop
-    /// visible beyond the shoulder silhouette.
-    static func hairBack() throws -> MeshResource {
+    /// Sheet of hair down the back — mid-back backdrop for Vesper (torso
+    /// space defaults) or a short bob skirt for Mika (head-space overrides).
+    static func hairBack(
+        topY: Float = 0.12,
+        drop: Float = 0.57,
+        half: Float = 0.150,
+        z: Float = -0.072
+    ) throws -> MeshResource {
         let mesh = GridMesh.build(
             us: ramp(-1, 1, 14),
             vs: ramp(0, 1, 16),
             point: { u, v in
-                let half: Float = 0.150 + 0.080 * v
+                let halfW = half + half * 0.53 * v
                 return SIMD3(
-                    u * half,
-                    0.12 - 0.57 * v,
-                    -0.072 - 0.02 * sin(v * .pi * 0.5) + 0.030 * u * u
+                    u * halfW,
+                    topY - drop * v,
+                    z - 0.02 * sin(v * .pi * 0.5) + 0.030 * u * u
                 )
             },
             uv: { SIMD2(($0 + 1) / 2, 1 - $1) }

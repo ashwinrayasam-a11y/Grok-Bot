@@ -10,6 +10,10 @@ final class ChatViewModel: ObservableObject {
     @Published var isThinking = false
     @Published var isHearing = false
     @Published var hearingStatus: String?
+    @Published private(set) var cast: CastMember = .vesper
+    /// Bumped (throttled) while tokens stream so the view can follow the text
+    /// without issuing a scroll command per token.
+    @Published private(set) var scrollPulse = 0
     @Published var banner: String? {
         didSet {
             bannerTask?.cancel()
@@ -26,6 +30,7 @@ final class ChatViewModel: ObservableObject {
 
     private var bannerTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
+    private var lastScrollPulse = Date.distantPast
     private let defaults = UserDefaults.standard
 
     init() {
@@ -36,15 +41,42 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.intensityBias: 0.55,
             SettingsKeys.awayModel: SettingsKeys.defaultAwayModel,
         ])
-        if let snapshot = SoulStore.load() {
+        if let raw = defaults.string(forKey: "castMember"),
+           let saved = CastMember(rawValue: raw) {
+            cast = saved
+        }
+        if let snapshot = SoulStore.load(for: cast) {
             emotion = snapshot.emotion
             messages = snapshot.messages
         }
-        // Republish the nested player's changes so bubbles update play state.
+        // Republish the nested player's changes so voice chips update.
         voice.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+    }
+
+    // MARK: - Cast
+
+    /// The emotion that colors the avatar's idle motion. Vesper is alive;
+    /// Mika holds her own fixed temperament; Chat has no presence at all.
+    var presenceEmotion: EmotionState {
+        cast.fixedEmotion ?? emotion
+    }
+
+    func switchCast(to member: CastMember) {
+        guard member != cast else { return }
+        voice.stop()
+        persist()
+        cast = member
+        defaults.set(member.rawValue, forKey: "castMember")
+        let snapshot = SoulStore.load(for: member)
+        emotion = snapshot?.emotion ?? EmotionState()
+        messages = snapshot?.messages ?? []
+        isThinking = false
+        isHearing = false
+        hearingStatus = nil
+        banner = nil
     }
 
     // MARK: - Settings
@@ -80,22 +112,9 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Sending
+    // MARK: - Voice input
 
-    func send(_ raw: String) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isThinking else { return }
-        let history = recentTurns()
-        messages.append(ChatMessage(role: .user, text: text))
-        isThinking = true
-        Task {
-            await deliver(text, history: history)
-            isThinking = false
-            persist()
-        }
-    }
-
-    /// A finished mic take: transcribe it (Mac Whisper at home, on-device
+    /// A finished mic take: transcribe (Mac Whisper at home, on-device
     /// Whisper away — never Apple Speech), then send like typed text.
     func heard(_ fileURL: URL) {
         guard !isHearing else { return }
@@ -107,7 +126,7 @@ final class ChatViewModel: ObservableObject {
                 isHearing = false
                 hearingStatus = nil
                 if text.isEmpty {
-                    banner = "She didn't catch anything — try again."
+                    banner = "Didn't catch anything — try again."
                 } else {
                     send(text)
                 }
@@ -129,11 +148,25 @@ final class ChatViewModel: ObservableObject {
                 banner = "Mac whisper failed — using on-device. (\(error.localizedDescription))"
             }
         }
-        // Away (or Mac STT failed): on-device WhisperKit. Still no Apple Speech.
         return try await LocalWhisper.shared.transcribe(fileURL) { [weak self] status in
             Task { @MainActor [weak self] in
                 self?.hearingStatus = status
             }
+        }
+    }
+
+    // MARK: - Sending
+
+    func send(_ raw: String) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isThinking else { return }
+        let history = recentTurns()
+        messages.append(ChatMessage(role: .user, text: text))
+        isThinking = true
+        Task {
+            await deliver(text, history: history)
+            isThinking = false
+            persist()
         }
     }
 
@@ -143,7 +176,7 @@ final class ChatViewModel: ObservableObject {
             .map { Turn(role: $0.role.rawValue, content: $0.text) }
     }
 
-    /// Prefer her home on the Mac; fall back to Grok direct when away.
+    /// Prefer home on the Mac; fall back to Grok direct when away.
     private func deliver(_ text: String, history: [Turn]) async {
         if let link = MacLink(urlString: macURLString), await link.isAwake() {
             mode = .home
@@ -151,7 +184,6 @@ final class ChatViewModel: ObservableObject {
                 try await sendViaMac(link, text: text, history: history)
                 return
             } catch VesperError.http(let code, _) where code == 404 {
-                // Older phone API without /v1/chat/stream — one-shot chat.
                 do {
                     try await sendViaMacLegacy(link, text: text, history: history)
                     return
@@ -174,13 +206,12 @@ final class ChatViewModel: ObservableObject {
             }
         } else {
             mode = .offline
-            banner = "Her Mac is unreachable and no xAI key is saved — she can't hear you right now."
+            banner = "The Mac is unreachable and no xAI key is saved."
             appendQuiet(nil)
         }
     }
 
-    /// Streaming home leg: tokens append live, her voice starts on the first
-    /// sentence clip while the rest is still generating.
+    /// Streaming home leg: tokens append live; voice starts on the first clip.
     private func sendViaMac(_ link: MacLink, text: String, history: [Turn]) async throws {
         let payload = macPayload(text: text, history: history)
         var replyID: UUID?
@@ -190,7 +221,7 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
             switch event.type {
             case "state":
-                if let state = event.state {
+                if self.cast == .vesper, let state = event.state {
                     self.emotion = state
                 }
             case "delta":
@@ -198,11 +229,13 @@ final class ChatViewModel: ObservableObject {
                 if let id = replyID {
                     self.mutateMessage(id) { $0.text += delta }
                 } else {
-                    let message = ChatMessage(role: .assistant, text: delta)
+                    var message = ChatMessage(role: .assistant, text: delta)
+                    message.isStreaming = true
                     replyID = message.id
                     self.messages.append(message)
-                    self.isThinking = false  // words are landing; drop the dots
+                    self.isThinking = false
                 }
+                self.bumpScroll()
             case "audio":
                 guard let id = replyID,
                       let b64 = event.audioB64,
@@ -217,8 +250,12 @@ final class ChatViewModel: ObservableObject {
                 }
                 self.voice.enqueue(clip, for: id)
             case "done":
-                if let id = replyID, let full = event.reply {
-                    self.mutateMessage(id) { $0.text = full }
+                if let id = replyID {
+                    self.mutateMessage(id) {
+                        if let full = event.reply { $0.text = full }
+                        $0.isStreaming = false
+                    }
+                    self.scrollPulse += 1
                 }
             case "error":
                 streamError = event.detail ?? "the stream broke"
@@ -227,24 +264,48 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        if replyID == nil {
-            // Nothing rendered — surface the failure so deliver() can fall back.
+        if let id = replyID {
+            mutateMessage(id) { $0.isStreaming = false }
+        } else {
             throw VesperError.http(502, streamError ?? "empty reply from the model")
         }
         if let streamError {
-            banner = "Her voice trailed off — \(streamError)"
+            banner = "The stream trailed off — \(streamError)"
         }
     }
 
-    /// Pre-streaming phone API (kept for older Macs): one-shot reply + clip.
+    /// Pre-streaming phone API (older Macs): one-shot reply + clip.
     private func sendViaMacLegacy(_ link: MacLink, text: String, history: [Turn]) async throws {
         let response = try await link.chat(macPayload(text: text, history: history))
-        emotion = response.state
+        if cast == .vesper {
+            emotion = response.state
+        }
         var audio: Data?
         if let b64 = response.audioB64 {
             audio = Data(base64Encoded: b64)
         }
         appendReply(response.reply, audio: audio)
+    }
+
+    private func sendViaXAI(key: String, text: String, history: [Turn]) async throws {
+        let system: String
+        if let override = cast.personaOverride {
+            system = override
+        } else {
+            // Vesper: same turn pipeline the Mac runs, mirrored on device.
+            emotion.blendIntensity(toward: intensityBias)
+            emotion.absorb(text, warmthBias: warmthBias, sadismBias: sadismBias)
+            system = Persona.systemPrompt(
+                state: emotion, userName: userName, notes: notes, intensityBias: intensityBias
+            )
+        }
+        let xai = XAILink(apiKey: key, model: awayModel)
+        let reply = try await xai.chat(system: system, history: history, user: text)
+        var audio: Data?
+        if let voiceID = cast.voiceID {
+            audio = try? await xai.speak(reply, voice: voiceID)
+        }
+        appendReply(reply, audio: audio)
     }
 
     private func macPayload(text: String, history: [Turn]) -> MacChatRequest {
@@ -257,7 +318,10 @@ final class ChatViewModel: ObservableObject {
             warmthBias: warmthBias,
             sadismBias: sadismBias,
             intensity: intensityBias,
-            wantAudio: true
+            wantAudio: cast.voiceID != nil,
+            personaOverride: cast.personaOverride,
+            plain: cast.plain,
+            voice: cast.voiceID
         )
     }
 
@@ -268,17 +332,13 @@ final class ChatViewModel: ObservableObject {
         messages[index] = message
     }
 
-    private func sendViaXAI(key: String, text: String, history: [Turn]) async throws {
-        // Same turn pipeline the Mac runs, mirrored on device.
-        emotion.blendIntensity(toward: intensityBias)
-        emotion.absorb(text, warmthBias: warmthBias, sadismBias: sadismBias)
-        let system = Persona.systemPrompt(
-            state: emotion, userName: userName, notes: notes, intensityBias: intensityBias
-        )
-        let xai = XAILink(apiKey: key, model: awayModel)
-        let reply = try await xai.chat(system: system, history: history, user: text)
-        let audio = try? await xai.speak(reply)
-        appendReply(reply, audio: audio)
+    /// At most ~8 scroll commands a second while tokens stream.
+    private func bumpScroll() {
+        let now = Date()
+        if now.timeIntervalSince(lastScrollPulse) > 0.12 {
+            lastScrollPulse = now
+            scrollPulse += 1
+        }
     }
 
     private func appendReply(_ text: String, audio: Data?) {
@@ -287,14 +347,15 @@ final class ChatViewModel: ObservableObject {
             message.audioSeconds = VoicePlayer.duration(of: audio)
         }
         messages.append(message)
-        // Her voice plays itself, like a voice note — no transport controls.
         if let audio {
             voice.play(audio, id: message.id)
         }
     }
 
     private func appendQuiet(_ error: Error?) {
-        var text = "*Vesper goes quiet for a moment.*"
+        var text = cast == .vesper
+            ? "*Vesper goes quiet for a moment.*"
+            : "No connection right now."
         if let error {
             text += "\n\n\(error.localizedDescription)"
         }
@@ -307,10 +368,15 @@ final class ChatViewModel: ObservableObject {
         voice.stop()
         messages = []
         emotion = EmotionState()
-        SoulStore.wipe()
+        SoulStore.wipe(for: cast)
     }
 
+    /// Encoding voice clips to JSON is heavy — never on the main actor.
     private func persist() {
-        SoulStore.save(SoulSnapshot(emotion: emotion, messages: messages))
+        let snapshot = SoulSnapshot(emotion: emotion, messages: messages)
+        let member = cast
+        Task.detached(priority: .utility) {
+            SoulStore.save(snapshot, for: member)
+        }
     }
 }
