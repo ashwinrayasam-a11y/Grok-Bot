@@ -134,6 +134,7 @@ struct ChatView: View {
     private var stage: some View {
         AvatarSurface(
             style: model.cast == .mika ? .mika : .vesper,
+            temperament: model.cast == .mika ? .mika : .vesper,
             tall: stageTall
         )
         .frame(height: stageTall ? 420 : 290)

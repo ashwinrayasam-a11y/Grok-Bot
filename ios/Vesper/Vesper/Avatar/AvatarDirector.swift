@@ -2,11 +2,43 @@ import Foundation
 import RealityKit
 import simd
 
+/// How a body carries itself — the physics of personality. Same continuous
+/// motion field for everyone; the temperament changes tempo, amplitude, and
+/// response so Mika moves like Mika, not like Vesper wearing a wig.
+struct MotionTemperament {
+    var pace = 1.0        // < 1 = drift targets change sooner
+    var headEnergy = 1.0  // gaze / head-roll amplitude
+    var sway = 1.0        // weight-shift amplitude
+    var tauScale = 1.0    // spring response; < 1 = livelier, still smooth
+    var breath: ClosedRange<Double> = 3.6...5.4      // breath period (s)
+    var blinkInterval: ClosedRange<Double> = 2.2...7.0
+    var glanceInterval: ClosedRange<Double> = 8...22
+    var talkLean = 1.0
+    var bounce = 0.0      // upbeat micro-beat amplitude (meters)
+
+    /// Slow, coiled, deliberate — stillness as presence.
+    static let vesper = MotionTemperament()
+
+    /// Quick, buoyant, music-in-her-head: faster drift, bigger sway, snappier
+    /// springs, more frequent glances, and a barely-there rhythmic bounce.
+    static let mika = MotionTemperament(
+        pace: 0.7,
+        headEnergy: 1.25,
+        sway: 1.35,
+        tauScale: 0.8,
+        breath: 2.9...4.3,
+        blinkInterval: 1.8...5.5,
+        glanceInterval: 5...14,
+        talkLean: 1.45,
+        bounce: 0.0012
+    )
+}
+
 /// Drives the rig every frame. Design rules, per the brief:
 /// - Fewer, slower, overlapping motions; damped springs on every channel.
 /// - No looping tics, no metronome blinks, no discrete expression states —
 ///   mood only *biases* continuous signals, so she is always in-between.
-/// - While Ara speaks, the mouth follows the audio but the body stays loose:
+/// - While she speaks, the mouth follows the audio but the body stays loose:
 ///   a slight lean, a settled gaze, breath still moving.
 final class AvatarDirector {
     private let rig: AvatarRig
@@ -34,25 +66,22 @@ final class AvatarDirector {
     }
     private var mood = Mood()
 
-    // Idle field.
-    private var gazeYaw = Wander(range: -0.075...0.075, pace: 3.5...9)
-    private var gazePitch = Wander(range: -0.035...0.035, pace: 4...10)
-    private var headRoll = Wander(range: -0.03...0.03, pace: 6...12)
-    private var weightX = Wander(range: -0.008...0.008, pace: 7...15)
+    private let temperament: MotionTemperament
+
+    // Idle field — constructed from the temperament in init.
+    private var gazeYaw: Wander
+    private var gazePitch: Wander
+    private var headRoll: Wander
+    private var weightX: Wander
     private var lipsPart = Wander(range: 0...1, pace: 5...12)
     private var lidFlutter = Wander(range: -0.03...0.03, pace: 2.5...6)
-    private var breathPeriod = Wander(range: 3.6...5.4, pace: 9...18)
+    private var breathPeriod: Wander
+    private var bounceRate = Wander(range: 1.0...1.4, pace: 6...12)
+    private var bouncePhase = 0.0
 
     // Occasional gestures.
-    private var blink = MotionCue(
-        interval: 2.2...7.0,
-        shape: .init(rise: 0.055...0.09, hold: 0.02...0.05, release: 0.10...0.17),
-        doubleChance: 0.14
-    )
-    private var glance = MotionCue(
-        interval: 8...22,
-        shape: .init(rise: 0.5...0.9, hold: 0.9...2.4, release: 0.7...1.2)
-    )
+    private var blink: MotionCue
+    private var glance: MotionCue
     private var swallow = MotionCue(
         interval: 18...45,
         shape: .init(rise: 0.15...0.25, hold: 0.04...0.1, release: 0.3...0.5)
@@ -116,11 +145,37 @@ final class AvatarDirector {
     private var breathPhase = 0.0
     private var previousLevel = 0.0
 
-    init(rig: AvatarRig) {
+    init(rig: AvatarRig, temperament: MotionTemperament = .vesper) {
         self.rig = rig
+        self.temperament = temperament
+
+        func scaled(_ range: ClosedRange<Double>, by k: Double) -> ClosedRange<Double> {
+            (range.lowerBound * k)...(range.upperBound * k)
+        }
+
+        let energy = temperament.headEnergy
+        let pace = temperament.pace
+        gazeYaw = Wander(range: scaled(-0.075...0.075, by: energy), pace: scaled(3.5...9, by: pace))
+        gazePitch = Wander(range: scaled(-0.035...0.035, by: energy), pace: scaled(4...10, by: pace))
+        headRoll = Wander(range: scaled(-0.03...0.03, by: energy), pace: scaled(6...12, by: pace))
+        weightX = Wander(
+            range: scaled(-0.008...0.008, by: temperament.sway),
+            pace: scaled(7...15, by: pace)
+        )
+        breathPeriod = Wander(range: temperament.breath, pace: 9...18)
+        blink = MotionCue(
+            interval: temperament.blinkInterval,
+            shape: .init(rise: 0.055...0.09, hold: 0.02...0.05, release: 0.10...0.17),
+            doubleChance: 0.14
+        )
+        glance = MotionCue(
+            interval: temperament.glanceInterval,
+            shape: .init(rise: 0.5...0.9, hold: 0.9...2.4, release: 0.7...1.2)
+        )
+
         for _ in rig.hairPieces {
             hairSprings.append(Damped())
-            hairWanders.append(Wander(range: -0.018...0.018, pace: 4...9))
+            hairWanders.append(Wander(range: -0.018...0.018, pace: scaled(4...9, by: pace)))
         }
     }
 
@@ -168,8 +223,17 @@ final class AvatarDirector {
         let breath = (sin(breathPhase) + 1) / 2 * mood.breathDepth + swallowEnv * 0.3
         breathFollow.track(breath, dt: dt, tau: 0.3)  // lagged follow-through
 
+        // Her micro-beat, if she has one (Mika): a barely-there bounce that
+        // wanders in tempo — upbeat energy, never a metronome.
+        var beat = 0.0
+        if temperament.bounce > 0 {
+            bouncePhase += dt * 2 * .pi * bounceRate.tick(dt)
+            beat = sin(bouncePhase) * temperament.bounce * (0.55 + 0.45 * mood.sway) * (1 - 0.5 * talking)
+        }
+
         // Gaze: wandering when idle, settling on you as she speaks,
         // drifting off-focus during a glance and easing back.
+        let tauK = temperament.tauScale
         let yawTarget = gazeYaw.tick(dt) * sway * (1 - 0.65 * talking)
             + glanceEnv * glance.direction * 0.14
         let pitchTarget = gazePitch.tick(dt) * idle
@@ -177,17 +241,17 @@ final class AvatarDirector {
             + mood.chinBias
             - swallowEnv * 0.05
             - nod.value * 0.06
-        let rollTarget = headRoll.tick(dt) * sway - weightS.value * 3.5
+        let rollTarget = headRoll.tick(dt) * sway - weightS.value * 3.5 + beat * 5
 
-        yawS.track(yawTarget, dt: dt, tau: 0.9)
-        pitchS.track(pitchTarget, dt: dt, tau: 1.0)
-        rollS.track(rollTarget, dt: dt, tau: 1.1)
+        yawS.track(yawTarget, dt: dt, tau: 0.9 * tauK)
+        pitchS.track(pitchTarget, dt: dt, tau: 1.0 * tauK)
+        rollS.track(rollTarget, dt: dt, tau: 1.1 * tauK)
 
         // Weight: slow shifts plus the occasional deeper settle.
         let weightTarget = weightX.tick(dt) * mood.sway + settleEnv * settle.direction * 0.011
-        weightS.track(weightTarget, dt: dt, tau: 1.6)
-        rootRollS.track(-weightS.value * 0.9, dt: dt, tau: 1.4)
-        leanS.track(0.013 * talking, dt: dt, tau: 0.8)
+        weightS.track(weightTarget, dt: dt, tau: 1.6 * tauK)
+        rootRollS.track(-weightS.value * 0.9, dt: dt, tau: 1.4 * tauK)
+        leanS.track(0.013 * talking * temperament.talkLean, dt: dt, tau: 0.8)
 
         // Mouth: audio drives the jaw; lips keep a faint idle life of their own.
         let jawTarget = pow(speakLevel.value, 0.85) * 0.16 * (0.75 + 0.25 * mood.glow)
@@ -267,7 +331,7 @@ final class AvatarDirector {
         rig.root.transform = Transform(
             scale: .one,
             rotation: simd_quatf(angle: Float(rootRollS.value), axis: [0, 0, 1]),
-            translation: SIMD3(Float(weightS.value), 0, Float(leanS.value))
+            translation: SIMD3(Float(weightS.value), Float(beat), Float(leanS.value))
         )
 
         let breathScale = Float(1 + 0.012 * breathFollow.value)

@@ -8,6 +8,7 @@ import SwiftUI
 struct AvatarSurface: UIViewRepresentable {
     @EnvironmentObject private var model: ChatViewModel
     var style: AvatarStyle
+    var temperament: MotionTemperament
     var tall: Bool
 
     func makeUIView(context: Context) -> ARView {
@@ -22,7 +23,7 @@ struct AvatarSurface: UIViewRepresentable {
             .disablePersonOcclusion,
             .disableGroundingShadows,
         ])
-        context.coordinator.attach(to: view, model: model, style: style)
+        context.coordinator.attach(to: view, model: model, style: style, temperament: temperament)
         return view
     }
 
@@ -41,14 +42,19 @@ struct AvatarSurface: UIViewRepresentable {
         private var updateSub: Cancellable?
 
         @MainActor
-        func attach(to view: ARView, model: ChatViewModel, style: AvatarStyle) {
+        func attach(
+            to view: ARView,
+            model: ChatViewModel,
+            style: AvatarStyle,
+            temperament: MotionTemperament
+        ) {
             do {
                 let rig = try AvatarRig(style: style)
                 let anchor = AnchorEntity(world: .zero)
                 anchor.addChild(rig.stage)
                 view.scene.addAnchor(anchor)
 
-                let director = AvatarDirector(rig: rig)
+                let director = AvatarDirector(rig: rig, temperament: temperament)
                 // Close over the (nonisolated) player, not the main-actor
                 // view model — the render loop polls these off-actor.
                 let voice = model.voice
