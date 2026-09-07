@@ -231,16 +231,25 @@ final class AvatarDirector {
             beat = sin(bouncePhase) * temperament.bounce * (0.55 + 0.45 * mood.sway) * (1 - 0.5 * talking)
         }
 
+        // Meet the lens: the pitch that points her face at the camera from
+        // eye height. The idle drifts AROUND this, so no framing (especially
+        // the pulled-back one, where the camera sits at chest height) can
+        // read as staring at the sky. Positive pitch = looking down.
+        let eyeHeight = 0.047
+        let towardCamera = (camY.value - eyeHeight) / max(0.2, camZ.value)
+        let lookAtPitch = -asin(min(0.35, max(-0.35, towardCamera)))
+
         // Gaze: wandering when idle, settling on you as she speaks,
         // drifting off-focus during a glance and easing back.
         let tauK = temperament.tauScale
         let yawTarget = gazeYaw.tick(dt) * sway * (1 - 0.65 * talking)
             + glanceEnv * glance.direction * 0.14
-        let pitchTarget = gazePitch.tick(dt) * idle
+        let pitchTarget = lookAtPitch
+            + gazePitch.tick(dt) * idle
             + glanceEnv * abs(glance.direction) * 0.03
             + mood.chinBias
-            - swallowEnv * 0.05
-            - nod.value * 0.06
+            - swallowEnv * 0.03
+            + nod.value * 0.06  // nods dip toward you — never a head toss
         let rollTarget = headRoll.tick(dt) * sway - weightS.value * 3.5 + beat * 5
 
         yawS.track(yawTarget, dt: dt, tau: 0.9 * tauK)
@@ -355,10 +364,11 @@ final class AvatarDirector {
         rig.lidR.transform.rotation = simd_quatf(angle: lidAngle, axis: [1, 0, 0])
 
         // Gaze: the iris discs translate inside the almonds (the 2D-anime eye
-        // mechanic) — gently countering the head so she holds on you while the
-        // head wanders, drifting off-focus during glances.
+        // mechanic) — countering the head's *deviation from the camera* so the
+        // eyes hold on you while the head drifts around the look-at point,
+        // slipping off-focus only during glances. Eye contact first.
         let eyeYaw = max(-0.16, min(0.16, -yawS.value * 0.42 + glanceEnv * glance.direction * 0.06))
-        let eyePitch = max(-0.12, min(0.12, -pitchS.value * 0.4))
+        let eyePitch = max(-0.12, min(0.12, -(pitchS.value - lookAtPitch) * 0.45))
         let gazeOffset = SIMD3(Float(eyeYaw * 0.022), Float(eyePitch * 0.02), 0)
         rig.irisL.transform.translation = AvatarRig.irisHome + gazeOffset
         rig.irisR.transform.translation = AvatarRig.irisHome + gazeOffset
