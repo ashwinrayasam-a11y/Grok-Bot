@@ -9,7 +9,14 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showSettings = false
     @State private var showMood = false
+    @State private var talkOn = false
     @AppStorage("stageTall") private var stageTall = false
+    @AppStorage("chatVisible") private var chatVisible = true
+
+    /// Chat cast has no stage, so its chat panel can never be hidden.
+    private var showChat: Bool {
+        chatVisible || !model.cast.hasPresence
+    }
 
     var body: some View {
         ZStack {
@@ -27,6 +34,7 @@ struct ChatView: View {
                 .environmentObject(model)
         }
         .task {
+            recorder.onAutoStop = { sendSpoken() }
             await model.refreshLink()
         }
         .onChange(of: recorder.deniedReason) {
@@ -34,6 +42,15 @@ struct ChatView: View {
                 model.banner = reason
                 recorder.deniedReason = nil
             }
+        }
+        // Talk loop: when her reply finishes speaking (or a voiceless turn
+        // completes), re-arm the mic after a beat.
+        .onChange(of: model.voice.playingID) { maybeRearmTalk() }
+        .onChange(of: model.isThinking) {
+            if !model.isThinking { maybeRearmTalk() }
+        }
+        .onChange(of: model.cast) {
+            if talkOn { setTalk(false) }
         }
     }
 
@@ -48,20 +65,27 @@ struct ChatView: View {
                 if model.cast.hasPresence {
                     stage
                 }
-                conversation
+                if showChat {
+                    conversation
+                } else {
+                    Spacer(minLength: 0)
+                }
                 statusLine
-                ComposerPill(
-                    draft: $draft,
-                    recorder: recorder,
-                    busy: model.isHearing,
-                    accent: model.cast.accent,
-                    placeholder: model.cast.placeholder,
-                    onSend: sendDraft,
-                    onTalkStart: startListening,
-                    onTalkEnd: sendSpoken
-                )
+                if showChat {
+                    ComposerPill(
+                        draft: $draft,
+                        recorder: recorder,
+                        busy: model.isHearing,
+                        accent: model.cast.accent,
+                        placeholder: model.cast.placeholder,
+                        onSend: sendDraft,
+                        onTalkStart: startListening,
+                        onTalkEnd: sendSpoken
+                    )
+                }
             }
             .safeAreaInset(edge: .top, spacing: 0) { header }
+            .animation(.spring(response: 0.45, dampingFraction: 0.9), value: showChat)
         }
     }
 
@@ -93,11 +117,39 @@ struct ChatView: View {
 
             Spacer()
 
-            if model.mode == .away || model.mode == .offline {
+            // Offline is the only state worth a pixel of chrome.
+            if model.mode == .offline {
                 Circle()
-                    .fill(model.mode == .away ? model.cast.accent.opacity(0.8) : Color.gray)
+                    .fill(Color.gray)
                     .frame(width: 6, height: 6)
                     .accessibilityLabel(model.mode.label)
+            }
+
+            // Talk: hands-free loop — listen, send, she answers, listen again.
+            Button {
+                setTalk(!talkOn)
+            } label: {
+                Image(systemName: talkOn ? "mic.fill" : "mic")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(talkOn ? model.cast.accent : VesperTheme.mute)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(talkOn ? "End Talk" : "Start Talk")
+
+            if model.cast.hasPresence {
+                Button {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                        chatVisible.toggle()
+                    }
+                } label: {
+                    Image(systemName: showChat ? "bubble.left.fill" : "bubble.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(VesperTheme.mute)
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(showChat ? "Hide chat" : "Show chat")
             }
 
             Menu {
@@ -121,7 +173,7 @@ struct ChatView: View {
         .padding(.vertical, 6)
         .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.45), .clear],
+                colors: [Color.black.opacity(0.30), .clear],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -135,9 +187,10 @@ struct ChatView: View {
         AvatarSurface(
             style: model.cast == .mika ? .mika : .vesper,
             temperament: model.cast == .mika ? .mika : .vesper,
-            tall: stageTall
+            tall: showChat ? stageTall : true
         )
-        .frame(height: stageTall ? 420 : 290)
+        .frame(height: showChat ? (stageTall ? 420 : 290) : nil)
+        .frame(maxHeight: showChat ? nil : .infinity)
         .clipped()
         .overlay(alignment: .bottom) {
             LinearGradient(
@@ -211,9 +264,13 @@ struct ChatView: View {
     @ViewBuilder
     private var statusLine: some View {
         let text: String? = {
-            if recorder.isRecording { return "listening — tap ■ to send" }
+            if let banner = model.banner { return banner }
+            if recorder.isRecording {
+                return talkOn ? "Talk on — just speak" : "listening — tap ■ to send"
+            }
             if model.isHearing { return model.hearingStatus ?? "hearing you…" }
-            return model.banner
+            if talkOn { return model.isThinking ? nil : "Talk on" }
+            return nil
         }()
         if let text {
             Text(text)
@@ -248,6 +305,42 @@ struct ChatView: View {
             model.heard(url)
         }
     }
+
+    // MARK: - Talk mode (STT → reply → TTS → listen again)
+
+    private func setTalk(_ on: Bool) {
+        talkOn = on
+        if on {
+            // One long-lived voiceChat session owns audio for the whole
+            // conversation — this is also what keeps Talk alive when the app
+            // is backgrounded (UIBackgroundModes: audio).
+            TalkSession.begin()
+            recorder.managesSession = false
+            model.voice.managesSession = false
+            recorder.autoStopOnSilence = true
+            startListening()
+        } else {
+            recorder.autoStopOnSilence = false
+            recorder.cancel()
+            model.voice.stop()
+            recorder.managesSession = true
+            model.voice.managesSession = true
+            TalkSession.end()
+        }
+    }
+
+    private func maybeRearmTalk() {
+        guard talkOn, !recorder.isRecording, !model.isThinking, !model.isHearing,
+              model.voice.playingID == nil
+        else { return }
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard talkOn, !recorder.isRecording, !model.isThinking, !model.isHearing,
+                  model.voice.playingID == nil
+            else { return }
+            await recorder.start()
+        }
+    }
 }
 
 /// Each member's canvas — near-black with their own light, never a template.
@@ -268,25 +361,26 @@ struct CastBackdrop: View {
             switch cast {
             case .vesper:
                 // Her night: low ember warmth, a breath of teal high and away.
+                // Vignette kept light — the canvas should read near-black.
                 RadialGradient(
-                    colors: [Color(hex: 0xC4703A).opacity(0.13), .clear],
+                    colors: [Color(hex: 0xC4703A).opacity(0.09), .clear],
                     center: UnitPoint(x: 0.15, y: 0.95),
                     startRadius: 0, endRadius: 500
                 )
                 RadialGradient(
-                    colors: [Color(hex: 0x2A6E6A).opacity(0.10), .clear],
+                    colors: [Color(hex: 0x2A6E6A).opacity(0.06), .clear],
                     center: UnitPoint(x: 0.95, y: 0.05),
                     startRadius: 0, endRadius: 420
                 )
             case .mika:
                 // Night flight: teal glow up top, a faint horizon line.
                 RadialGradient(
-                    colors: [Color(hex: 0x3FB8B2).opacity(0.14), .clear],
+                    colors: [Color(hex: 0x3FB8B2).opacity(0.09), .clear],
                     center: UnitPoint(x: 0.5, y: -0.1),
                     startRadius: 0, endRadius: 520
                 )
                 LinearGradient(
-                    colors: [.clear, Color(hex: 0x3FB8B2).opacity(0.06), .clear],
+                    colors: [.clear, Color(hex: 0x3FB8B2).opacity(0.04), .clear],
                     startPoint: UnitPoint(x: 0, y: 0.42),
                     endPoint: UnitPoint(x: 0, y: 0.50)
                 )

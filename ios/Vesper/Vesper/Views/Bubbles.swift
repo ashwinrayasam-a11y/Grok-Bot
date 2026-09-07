@@ -57,7 +57,7 @@ struct MessageRow: View, Equatable {
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color.white.opacity(0.07))
+                        .fill(Color.white.opacity(0.055))
                 )
         }
     }

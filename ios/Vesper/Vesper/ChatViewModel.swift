@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -377,6 +378,52 @@ final class ChatViewModel: ObservableObject {
             text += "\n\n\(error.localizedDescription)"
         }
         messages.append(ChatMessage(role: .assistant, text: text, isError: true))
+    }
+
+    // MARK: - Background survival
+
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private var isBusy: Bool {
+        isThinking || isHearing || voice.isLive
+    }
+
+    /// Honest iOS lifecycle: with the `audio` background mode, Talk keeps the
+    /// app alive as long as the session is recording/playing. Without audio,
+    /// this grace task lets an in-flight turn (stream, transcription, TTS)
+    /// finish after a swipe-home; pure visual idle cannot run backgrounded —
+    /// the system suspends us, and the stage resumes cleanly on return.
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            beginGrace()
+        case .active:
+            endGrace()
+            Task { await refreshLink() }
+        default:
+            break
+        }
+    }
+
+    private func beginGrace() {
+        guard backgroundTask == .invalid, isBusy else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "vesper.finish-turn") {
+            [weak self] in
+            self?.endGrace()
+        }
+        Task { [weak self] in
+            // Release as soon as the turn lands — no busy loop, no battery tax.
+            while let self, self.backgroundTask != .invalid, self.isBusy {
+                try? await Task.sleep(for: .seconds(2))
+            }
+            self?.endGrace()
+        }
+    }
+
+    private func endGrace() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
     }
 
     // MARK: - Housekeeping

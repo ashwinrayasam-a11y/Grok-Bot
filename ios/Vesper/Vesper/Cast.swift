@@ -34,11 +34,7 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
     var hasPresence: Bool { self != .chat }
 
     var placeholder: String {
-        switch self {
-        case .vesper: return "Speak to her…"
-        case .mika: return "Say hey to Mika…"
-        case .chat: return "Ask anything"
-        }
+        "Message \(displayName)"
     }
 
     var emptyTitle: String {

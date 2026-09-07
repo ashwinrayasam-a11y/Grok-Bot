@@ -11,6 +11,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Vesper reaches her home on your Mac over your Wi-Fi.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -59,10 +59,15 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         playData(clips[0])
     }
 
+    /// False while TalkSession owns the audio session (Talk mode).
+    var managesSession = true
+
     private func playData(_ data: Data) {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio)
-        try? session.setActive(true)
+        if managesSession {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .spokenAudio)
+            try? session.setActive(true)
+        }
         guard let newPlayer = try? AVAudioPlayer(data: data) else {
             advance()
             return

@@ -40,11 +40,13 @@ struct ComposerPill: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(
-            Capsule().fill(.ultraThinMaterial)
+            // Dark solid, not frosted — the Grok/ChatGPT panel, cheaper to
+            // composite than material blur too.
+            Capsule().fill(Color(hex: 0x1A1715))
         )
         .overlay(
             Capsule().strokeBorder(
-                recorder.isRecording ? accent.opacity(0.55) : Color.white.opacity(0.09),
+                recorder.isRecording ? accent.opacity(0.55) : Color.white.opacity(0.08),
                 lineWidth: 1
             )
         )
