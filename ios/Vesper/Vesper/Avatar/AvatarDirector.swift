@@ -15,12 +15,14 @@ struct MotionTemperament {
     var glanceInterval: ClosedRange<Double> = 8...22
     var talkLean = 1.0
     var bounce = 0.0      // upbeat micro-beat amplitude (meters)
+    var stageDistance = 1.0  // camera pull-back multiplier (> 1 = smaller on screen)
 
     /// Slow, coiled, deliberate — stillness as presence.
     static let vesper = MotionTemperament()
 
     /// Quick, buoyant, music-in-her-head: faster drift, bigger sway, snappier
     /// springs, more frequent glances, and a barely-there rhythmic bounce.
+    /// Framed a step farther back than Vesper.
     static let mika = MotionTemperament(
         pace: 0.7,
         headEnergy: 1.25,
@@ -30,7 +32,8 @@ struct MotionTemperament {
         blinkInterval: 1.8...5.5,
         glanceInterval: 5...14,
         talkLean: 1.45,
-        bounce: 0.0012
+        bounce: 0.0012,
+        stageDistance: 1.10
     )
 }
 
@@ -124,10 +127,10 @@ final class AvatarDirector {
     private var breathFollow = Damped()
     private var chillS = Damped(0.35)
     private var glowS = Damped(0.55)
-    private var camY = Damped(0.062)
-    private var camZ = Damped(0.44)
+    private var camY = Damped(0.047)  // eye level
+    private var camZ = Damped(0.54)
     private var camFov = Damped(22)
-    private var focusY = Damped(0.058)
+    private var focusY = Damped(0.062)
 
     // Expression springs.
     private var browLS = Damped()
@@ -156,7 +159,8 @@ final class AvatarDirector {
         let energy = temperament.headEnergy
         let pace = temperament.pace
         gazeYaw = Wander(range: scaled(-0.075...0.075, by: energy), pace: scaled(3.5...9, by: pace))
-        gazePitch = Wander(range: scaled(-0.035...0.035, by: energy), pace: scaled(4...10, by: pace))
+        // Pitch wander stays modest: idle lives in the body, not head bobbing.
+        gazePitch = Wander(range: scaled(-0.026...0.026, by: energy), pace: scaled(4...10, by: pace))
         headRoll = Wander(range: scaled(-0.03...0.03, by: energy), pace: scaled(6...12, by: pace))
         weightX = Wander(
             range: scaled(-0.008...0.008, by: temperament.sway),
@@ -247,7 +251,7 @@ final class AvatarDirector {
         let pitchTarget = lookAtPitch
             + gazePitch.tick(dt) * idle
             + glanceEnv * abs(glance.direction) * 0.03
-            + mood.chinBias
+            + mood.chinBias * 0.5  // flavor only — never enough to break eye level
             - swallowEnv * 0.03
             + nod.value * 0.06  // nods dip toward you — never a head toss
         let rollTarget = headRoll.tick(dt) * sway - weightS.value * 3.5 + beat * 5
@@ -260,7 +264,8 @@ final class AvatarDirector {
         let weightTarget = weightX.tick(dt) * mood.sway + settleEnv * settle.direction * 0.011
         weightS.track(weightTarget, dt: dt, tau: 1.6 * tauK)
         rootRollS.track(-weightS.value * 0.9, dt: dt, tau: 1.4 * tauK)
-        leanS.track(0.013 * talking * temperament.talkLean, dt: dt, tau: 0.8)
+        // A slight standing lean toward the camera, deepening as she speaks.
+        leanS.track(0.004 + 0.013 * talking * temperament.talkLean, dt: dt, tau: 0.8)
 
         // Mouth: audio drives the jaw; lips keep a faint idle life of their own.
         let jawTarget = pow(speakLevel.value, 0.85) * 0.16 * (0.75 + 0.25 * mood.glow)
@@ -376,10 +381,14 @@ final class AvatarDirector {
         rig.tintLights(chill: chillS.value, glow: glowS.value)
 
         // Camera framing (compact bust ↔ pulled-back décolleté), eased.
-        camY.track(frameTall ? -0.02 : 0.062, dt: dt, tau: 0.5)
-        camZ.track(frameTall ? 0.60 : 0.44, dt: dt, tau: 0.5)
-        camFov.track(frameTall ? 32 : 22, dt: dt, tau: 0.5)
-        focusY.track(frameTall ? -0.02 : 0.058, dt: dt, tau: 0.5)
+        // The camera rides at her eye level so eye contact is the resting
+        // state (no chin-up look-at), and the focus sits above the eye line
+        // so she drops slightly in the window — eye line meets the user.
+        let distance = temperament.stageDistance
+        camY.track(frameTall ? 0.010 : eyeHeight, dt: dt, tau: 0.5)
+        camZ.track((frameTall ? 0.68 : 0.54) * distance, dt: dt, tau: 0.5)
+        camFov.track(frameTall ? 30 : 22, dt: dt, tau: 0.5)
+        focusY.track(frameTall ? 0.0 : 0.062, dt: dt, tau: 0.5)
         rig.camera.camera.fieldOfViewInDegrees = Float(camFov.value)
         rig.camera.look(
             at: SIMD3(0, Float(focusY.value), 0.02),

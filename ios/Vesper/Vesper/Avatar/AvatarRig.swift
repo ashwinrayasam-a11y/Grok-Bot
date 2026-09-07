@@ -314,7 +314,7 @@ final class AvatarRig {
         fill.look(at: [0, 0, 0], from: [0.1, 0.3, 1], relativeTo: nil)
 
         camera.camera.fieldOfViewInDegrees = 22
-        camera.position = [0, 0.055, 0.44]
+        camera.position = [0, 0.047, 0.54]  // eye level; director takes over per frame
 
         stage.addChild(root)
         stage.addChild(keyLight)
