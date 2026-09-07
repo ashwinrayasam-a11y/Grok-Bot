@@ -33,7 +33,7 @@ def test_persona_matches_source():
 
 def test_chat_replies_and_evolves_state(monkeypatch):
     monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: _fake_stream(**kw))
-    monkeypatch.setattr(phone_api, "_synthesize", lambda text: None)
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: None)
     r = client.post(
         "/v1/chat", json={"message": "I love you and I feel safe with you."}
     )
@@ -48,7 +48,7 @@ def test_chat_replies_and_evolves_state(monkeypatch):
 
 def test_chat_returns_audio_when_available(monkeypatch):
     monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: _fake_stream(**kw))
-    monkeypatch.setattr(phone_api, "_synthesize", lambda text: (b"mp3!", "audio/mpeg"))
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: (b"mp3!", "audio/mpeg"))
     r = client.post("/v1/chat", json={"message": "hey you"})
     assert r.status_code == 200
     body = r.json()
@@ -64,7 +64,7 @@ def test_chat_carries_history_and_state(monkeypatch):
         yield "mm."
 
     monkeypatch.setattr(phone_api, "stream_chat", spy_stream)
-    monkeypatch.setattr(phone_api, "_synthesize", lambda text: None)
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: None)
     r = client.post(
         "/v1/chat",
         json={
@@ -130,7 +130,7 @@ def test_stream_tokens_then_done(monkeypatch):
     chunks = ["One. ", "Two ", "three."]
     monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(chunks))
     monkeypatch.setattr(
-        phone_api, "_synthesize", lambda text: (f"[{text}]".encode(), "audio/mpeg")
+        phone_api, "_synthesize", lambda text, voice=None: (f"[{text}]".encode(), "audio/mpeg")
     )
     events = _stream_events({"message": "hey"})
 
@@ -148,7 +148,7 @@ def test_stream_speaks_first_sentence_early(monkeypatch):
     chunks = ["One. ", "Two ", "three."]
     monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(chunks))
     monkeypatch.setattr(
-        phone_api, "_synthesize", lambda text: (f"[{text}]".encode(), "audio/mpeg")
+        phone_api, "_synthesize", lambda text, voice=None: (f"[{text}]".encode(), "audio/mpeg")
     )
     events = _stream_events({"message": "hey"})
 
@@ -167,7 +167,7 @@ def test_stream_speaks_first_sentence_early(monkeypatch):
 
 def test_stream_without_voice_still_streams(monkeypatch):
     monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(["mm."]))
-    monkeypatch.setattr(phone_api, "_synthesize", lambda text: None)
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: None)
     events = _stream_events({"message": "hey"})
     assert [e["type"] for e in events if e["type"] == "audio"] == []
     assert events[-1]["type"] == "done"
@@ -187,3 +187,60 @@ def test_stream_surfaces_model_errors(monkeypatch):
 def test_stream_rejects_empty_message():
     r = client.post("/v1/chat/stream", json={"message": "  "})
     assert r.status_code == 400
+
+
+def test_persona_override_replaces_vesper_prompt(monkeypatch):
+    captured = {}
+
+    def spy_stream(**kw):
+        captured.update(kw)
+        yield "roger that."
+
+    monkeypatch.setattr(phone_api, "stream_chat", spy_stream)
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: None)
+    r = client.post(
+        "/v1/chat",
+        json={
+            "message": "hey",
+            "persona_override": "You are Mika, a bright pilot.",
+            "plain": True,
+            "user_name": "Ash",
+        },
+    )
+    assert r.status_code == 200
+    system = captured["messages"][0]["content"]
+    assert system.startswith("You are Mika")
+    assert "Vesper" not in system
+    assert "Ash" in system
+
+
+def test_plain_skips_emotion_drift(monkeypatch):
+    monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(["ok."]))
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: None)
+    sent = {"warmth": 0.5, "sadism": 0.5}
+    r = client.post(
+        "/v1/chat",
+        json={
+            "message": "I love you and I feel safe with you.",
+            "persona_override": "You are a concise assistant.",
+            "plain": True,
+            "state": sent,
+        },
+    )
+    body = r.json()
+    # Affectionate text would normally raise warmth; plain passes state through.
+    assert body["state"]["warmth"] == 0.5
+
+
+def test_voice_override_reaches_tts(monkeypatch):
+    seen = {}
+
+    def fake_synth(text, voice=None):
+        seen["voice"] = voice
+        return (b"clip", "audio/mpeg")
+
+    monkeypatch.setattr(phone_api, "stream_chat", lambda **kw: iter(["hi there."]))
+    monkeypatch.setattr(phone_api, "_synthesize", fake_synth)
+    r = client.post("/v1/chat", json={"message": "hey", "voice": "eve"})
+    assert r.status_code == 200
+    assert seen["voice"] == "eve"

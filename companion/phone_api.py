@@ -108,8 +108,8 @@ def _speakable(text: str) -> str:
     return re.sub(r"\s+", " ", _MD_NOISE.sub(" ", text)).strip()[:4000]
 
 
-def _synthesize(text: str) -> tuple[bytes, str] | None:
-    """Ara says it. Returns (audio bytes, mime) or None when voice is unavailable."""
+def _synthesize(text: str, voice: str | None = None) -> tuple[bytes, str] | None:
+    """xAI TTS. Returns (audio bytes, mime) or None when voice is unavailable."""
     key = _xai_key()
     speakable = _speakable(text)
     if not key or not speakable:
@@ -118,7 +118,11 @@ def _synthesize(text: str) -> tuple[bytes, str] | None:
         response = httpx.post(
             TTS_URL,
             headers={"Authorization": f"Bearer {key}"},
-            json={"text": speakable, "voice_id": TTS_VOICE, "language": TTS_LANGUAGE},
+            json={
+                "text": speakable,
+                "voice_id": voice or TTS_VOICE,
+                "language": TTS_LANGUAGE,
+            },
             timeout=60,
         )
         response.raise_for_status()
@@ -144,6 +148,13 @@ class ChatRequest(BaseModel):
     intensity: float = 0.55
     want_audio: bool = True
     temperature: float = 0.92
+    # Cast support: a bespoke system prompt for non-Vesper characters
+    # (Mika / plain Chat). When set, Vesper's persona pipeline is bypassed;
+    # when `plain` is also true the emotional-state drift is skipped entirely.
+    persona_override: str | None = None
+    plain: bool = False
+    # Optional per-request TTS voice (defaults to the configured voice).
+    voice: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -185,11 +196,23 @@ def persona() -> dict[str, str]:
 
 
 def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
-    """Shared turn pipeline (same as app.py's respond()): blend intensity,
-    drift the living state from the message, build the system prompt."""
+    """Shared turn pipeline. Vesper's path is unchanged (same as app.py's
+    respond()). Cast members with a persona_override use their own prompt;
+    `plain` additionally skips the emotional-state drift."""
     message = (req.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is empty")
+
+    history = [{"role": t.role, "content": t.content} for t in req.history]
+
+    if req.persona_override is not None:
+        state = EmotionalState.from_dict(req.state)  # passed through untouched
+        system = req.persona_override
+        if req.user_name.strip():
+            system += f"\n\nThey go by: {req.user_name.strip()}. Prefer this name."
+        if not req.plain and req.notes.strip():
+            system += f"\n\n## Private notes from them\n{req.notes.strip()}"
+        return state, history_to_messages(history, system, message)
 
     state = EmotionalState.from_dict(req.state)
     state.intensity = max(0.0, min(1.0, 0.7 * state.intensity + 0.3 * req.intensity))
@@ -205,7 +228,6 @@ def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
     elif req.intensity < 0.35:
         system += "\n\nBias this reply toward quieter, lower-intensity presence."
 
-    history = [{"role": t.role, "content": t.content} for t in req.history]
     return state, history_to_messages(history, system, message)
 
 
@@ -225,7 +247,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     audio_b64: str | None = None
     audio_mime: str | None = None
     if req.want_audio:
-        audio = _synthesize(reply)
+        audio = _synthesize(reply, voice=req.voice)
         if audio:
             audio_b64 = base64.b64encode(audio[0]).decode("ascii")
             audio_mime = audio[1]
@@ -290,7 +312,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             nonlocal seq
             text = segment.strip()
             if req.want_audio and text:
-                pending.append((seq, text, tts.submit(_synthesize, text)))
+                pending.append((seq, text, tts.submit(_synthesize, text, req.voice)))
                 seq += 1
 
         def drain(block: bool) -> Iterator[str]:
