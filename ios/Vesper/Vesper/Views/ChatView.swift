@@ -181,14 +181,10 @@ struct ChatView: View {
         )
     }
 
-    /// Her stage: the bust over the page's own light, fading into the canvas.
-    /// Tap to pull between bust and décolleté framing.
+    /// Her stage: the familiar 2D cutout over the page's own light, fading
+    /// into the canvas. Breath only — no wiggle, no 3D. Tap to resize.
     private var stage: some View {
-        AvatarSurface(
-            style: model.cast == .mika ? .mika : .vesper,
-            temperament: model.cast == .mika ? .mika : .vesper,
-            tall: showChat ? stageTall : true
-        )
+        CutoutStage(cast: model.cast)
         .frame(height: showChat ? (stageTall ? 420 : 290) : nil)
         .frame(maxHeight: showChat ? nil : .infinity)
         .clipped()

@@ -65,23 +65,6 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Cast
 
-    /// The emotion that colors the avatar's idle motion. Vesper is alive;
-    /// Mika holds her own fixed temperament; Chat has no presence at all.
-    var presenceEmotion: EmotionState {
-        cast.fixedEmotion ?? emotion
-    }
-
-    /// The mood-meter dials (Settings) — Vesper's look shifts with them
-    /// directly; other members hold their own temperament.
-    var presenceDials: AvatarDirector.MoodDials? {
-        guard cast == .vesper else { return nil }
-        return AvatarDirector.MoodDials(
-            warmth: warmthBias,
-            sadism: sadismBias,
-            intensity: intensityBias
-        )
-    }
-
     func switchCast(to member: CastMember) {
         guard member != cast else { return }
         voice.stop()

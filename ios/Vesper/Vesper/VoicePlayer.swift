@@ -11,10 +11,9 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var player: AVAudioPlayer? {
         didSet { meterPlayer = player }
     }
-    /// RealityKit's render callback reads the meter from a nonisolated
-    /// context. This weak mirror keeps that read Swift 6-legal: it is only
-    /// written alongside `player`, and AVAudioPlayer metering is safe to
-    /// poll from the render loop.
+    /// Nonisolated mirror for off-actor readers (background checks today;
+    /// lip-sync metering again if a Live2D stage lands later). Written only
+    /// alongside `player`; AVAudioPlayer metering is safe to poll.
     private nonisolated(unsafe) weak var meterPlayer: AVAudioPlayer?
     private var queue: [Data] = []
 

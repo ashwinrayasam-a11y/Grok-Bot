@@ -97,18 +97,4 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
 
     /// Plain members skip the emotional-state machinery entirely.
     var plain: Bool { self == .chat }
-
-    /// Fixed mood biases for Mika's presence (Vesper uses her living state;
-    /// this only colors the avatar's idle motion, never the text).
-    var fixedEmotion: EmotionState? {
-        guard self == .mika else { return nil }
-        var e = EmotionState()
-        e.playfulness = 0.85
-        e.warmth = 0.7
-        e.sadism = 0.08
-        e.jealousy = 0.08
-        e.melancholy = 0.1
-        e.intensity = 0.5
-        return e
-    }
 }
