@@ -20,16 +20,21 @@ struct CutoutStage: View {
     var body: some View {
         Group {
             if UIImage(named: assetName) != nil {
-                Image(assetName)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .scaleEffect(breathing ? 1.008 : 0.998, anchor: .bottom)
-                    .animation(
-                        .easeInOut(duration: 3.8).repeatForever(autoreverses: true),
-                        value: breathing
-                    )
-                    .onAppear { breathing = true }
+                // Fill the stage width, anchored at the bottom — she stands
+                // in the frame, not a hundred miles away.
+                GeometryReader { geo in
+                    Image(assetName)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+                        .clipped()
+                        .scaleEffect(breathing ? 1.010 : 0.998, anchor: .bottom)
+                        .animation(
+                            .easeInOut(duration: 3.8).repeatForever(autoreverses: true),
+                            value: breathing
+                        )
+                        .onAppear { breathing = true }
+                }
             } else {
                 placeholder
             }

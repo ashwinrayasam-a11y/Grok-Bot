@@ -185,7 +185,7 @@ struct ChatView: View {
     /// into the canvas. Breath only — no wiggle, no 3D. Tap to resize.
     private var stage: some View {
         CutoutStage(cast: model.cast)
-        .frame(height: showChat ? (stageTall ? 420 : 290) : nil)
+        .frame(height: showChat ? (stageTall ? 560 : 420) : nil)
         .frame(maxHeight: showChat ? nil : .infinity)
         .clipped()
         .overlay(alignment: .bottom) {
