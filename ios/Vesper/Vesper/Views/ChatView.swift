@@ -220,8 +220,12 @@ struct ChatView: View {
                         MessageRow(
                             message: message,
                             isPlaying: model.voice.playingID == message.id,
+                            isRegenerating: model.regeneratingID == message.id,
+                            canRegenerate: model.cast.voiceID != nil
+                                && message.role == .assistant && !message.isError,
                             accent: model.cast.accent,
-                            onReplay: { [weak model] in model?.voice.replay(message) }
+                            onReplay: { [weak model] in model?.voice.replay(message) },
+                            onRegenerate: { [weak model] in model?.regenerateVoice(for: message) }
                         )
                         .equatable()
                         .id(message.id)

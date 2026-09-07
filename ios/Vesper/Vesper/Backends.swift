@@ -144,6 +144,32 @@ struct MacLink {
         }
     }
 
+    /// Fresh TTS take from the Mac (POST /v1/tts) — used by Regenerate.
+    func tts(text: String, voice: String?) async throws -> Data {
+        struct TTSRequestBody: Encodable {
+            var text: String
+            var voice: String?
+        }
+        struct TTSResponseBody: Decodable {
+            var audioB64: String
+        }
+        var request = URLRequest(url: baseURL.appending(path: "v1/tts"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try snakeEncoder().encode(TTSRequestBody(text: text, voice: voice))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw VesperError.http(code, String(data: data, encoding: .utf8) ?? "")
+        }
+        let decoded = try snakeDecoder().decode(TTSResponseBody.self, from: data)
+        guard let clip = Data(base64Encoded: decoded.audioB64) else {
+            throw VesperError.emptyReply
+        }
+        return clip
+    }
+
     /// Upload a recorded clip to the Mac's Whisper (POST /v1/stt) — verbatim,
     /// uncensored transcription with the same stack the desktop uses.
     func transcribe(fileURL: URL) async throws -> String {

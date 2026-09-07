@@ -380,6 +380,43 @@ final class ChatViewModel: ObservableObject {
         messages.append(ChatMessage(role: .assistant, text: text, isError: true))
     }
 
+    // MARK: - Voice regeneration
+
+    @Published private(set) var regeneratingID: UUID?
+
+    /// Fresh take: re-synthesize this reply's voice (Mac TTS at home, xAI
+    /// direct away), replace the cached clips atomically, and play it. The
+    /// old audio survives if synthesis fails.
+    func regenerateVoice(for message: ChatMessage) {
+        guard message.role == .assistant, !message.isError,
+              let voiceID = cast.voiceID, regeneratingID == nil
+        else { return }
+        regeneratingID = message.id
+        let text = message.text
+        Task {
+            var clip: Data?
+            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+                clip = try? await link.tts(text: text, voice: voiceID)
+            }
+            if clip == nil, let key = xaiKey {
+                clip = try? await XAILink(apiKey: key, model: awayModel).speak(text, voice: voiceID)
+            }
+            if let clip {
+                let seconds = VoicePlayer.duration(of: clip)
+                mutateMessage(message.id) {
+                    $0.audio = nil
+                    $0.audioClips = [clip]
+                    $0.audioSeconds = seconds
+                }
+                voice.play(clip, id: message.id)
+                persist()
+            } else {
+                banner = "Couldn't regenerate the voice right now."
+            }
+            regeneratingID = nil
+        }
+    }
+
     // MARK: - Background survival
 
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid

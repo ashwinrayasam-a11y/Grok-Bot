@@ -169,6 +169,7 @@ class ChatResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
+    voice: str | None = None  # per-cast voice (defaults to the configured one)
 
 
 app = FastAPI(title=f"{COMPANION_NAME} phone API", version="1.0.0")
@@ -385,7 +386,7 @@ def stt(audio: UploadFile = File(...)) -> dict[str, str]:
 
 @app.post("/v1/tts")
 def tts(req: TTSRequest) -> dict[str, str]:
-    audio = _synthesize(req.text)
+    audio = _synthesize(req.text, voice=req.voice)
     if not audio:
         raise HTTPException(
             status_code=503,

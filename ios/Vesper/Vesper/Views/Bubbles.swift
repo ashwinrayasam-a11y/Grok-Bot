@@ -28,12 +28,17 @@ enum MarkdownStore {
 struct MessageRow: View, Equatable {
     let message: ChatMessage
     let isPlaying: Bool
+    let isRegenerating: Bool
+    let canRegenerate: Bool
     let accent: Color
     let onReplay: () -> Void
+    let onRegenerate: () -> Void
 
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
         lhs.message == rhs.message
             && lhs.isPlaying == rhs.isPlaying
+            && lhs.isRegenerating == rhs.isRegenerating
+            && lhs.canRegenerate == rhs.canRegenerate
             && lhs.accent == rhs.accent
     }
 
@@ -65,13 +70,20 @@ struct MessageRow: View, Equatable {
     /// Assistant: free text on the canvas — no bubble chrome at all.
     private var assistantRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if message.hasVoice {
-                VoiceChip(
-                    isPlaying: isPlaying,
-                    seconds: message.audioSeconds,
-                    accent: accent,
-                    action: onReplay
-                )
+            if message.hasVoice || (canRegenerate && !message.isStreaming) {
+                HStack(spacing: 8) {
+                    if message.hasVoice {
+                        VoiceChip(
+                            isPlaying: isPlaying,
+                            seconds: message.audioSeconds,
+                            accent: accent,
+                            action: onReplay
+                        )
+                    }
+                    if canRegenerate && !message.isStreaming {
+                        regenerateButton
+                    }
+                }
             }
             Group {
                 if message.isStreaming {
@@ -86,6 +98,44 @@ struct MessageRow: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.trailing, 40)
+        .contextMenu {
+            if message.hasVoice {
+                Button {
+                    onReplay()
+                } label: {
+                    Label("Replay", systemImage: "waveform")
+                }
+            }
+            if canRegenerate && !message.isStreaming {
+                Button {
+                    onRegenerate()
+                } label: {
+                    Label("Regenerate voice", systemImage: "arrow.clockwise")
+                }
+            }
+        }
+    }
+
+    /// Quiet refresh: a fresh take of her voice for this reply.
+    private var regenerateButton: some View {
+        Button(action: onRegenerate) {
+            Group {
+                if isRegenerating {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(accent)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(VesperTheme.mute)
+                }
+            }
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(Color.white.opacity(0.05)))
+        }
+        .buttonStyle(.plain)
+        .disabled(isRegenerating)
+        .accessibilityLabel("Regenerate voice")
     }
 }
 

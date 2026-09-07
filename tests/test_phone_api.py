@@ -232,6 +232,20 @@ def test_plain_skips_emotion_drift(monkeypatch):
     assert body["state"]["warmth"] == 0.5
 
 
+def test_tts_endpoint_voice_passthrough(monkeypatch):
+    seen = {}
+
+    def fake_synth(text, voice=None):
+        seen["voice"] = voice
+        return (b"take2", "audio/mpeg")
+
+    monkeypatch.setattr(phone_api, "_synthesize", fake_synth)
+    r = client.post("/v1/tts", json={"text": "again, differently", "voice": "eve"})
+    assert r.status_code == 200
+    assert seen["voice"] == "eve"
+    assert base64.b64decode(r.json()["audio_b64"]) == b"take2"
+
+
 def test_voice_override_reaches_tts(monkeypatch):
     seen = {}
 
