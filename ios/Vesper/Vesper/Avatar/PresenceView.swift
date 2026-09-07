@@ -28,7 +28,7 @@ struct AvatarSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ view: ARView, context: Context) {
-        context.coordinator.director?.setMood(from: model.presenceEmotion)
+        context.coordinator.director?.setMood(from: model.presenceEmotion, dials: model.presenceDials)
         context.coordinator.director?.frameTall = tall
     }
 
@@ -60,7 +60,7 @@ struct AvatarSurface: UIViewRepresentable {
                 let voice = model.voice
                 director.audioLevel = { [weak voice] in voice?.meterLevel() ?? 0 }
                 director.isSpeaking = { [weak voice] in voice?.isLive ?? false }
-                director.setMood(from: model.presenceEmotion)
+                director.setMood(from: model.presenceEmotion, dials: model.presenceDials)
 
                 self.rig = rig
                 self.director = director

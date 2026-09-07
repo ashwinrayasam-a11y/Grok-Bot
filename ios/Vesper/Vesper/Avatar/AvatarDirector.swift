@@ -58,8 +58,12 @@ final class AvatarDirector {
         var lidDroop = 0.16
         var sway = 1.0
         var breathDepth = 1.0
+        var breathPeriodScale = 1.0  // > 1 = slower breath (warm, settled)
         var chinBias = 0.0    // radians; negative = chin dipped, colder
         var blinkSpacing = 1.0
+        var leanIn = 0.004    // resting lean toward the camera (meters)
+        var glanceSoft = 1.0  // < 1 = gentler, smaller glance-offs
+        var microEnergy = 1.0 // quickness of micro-motion with intensity
         // Expression biases — they tilt continuous signals, never pick poses.
         var browLift = 0.0    // + soft/open, − lowered/cold
         var browArch = 0.4    // one-brow skepticism gain
@@ -183,20 +187,45 @@ final class AvatarDirector {
         }
     }
 
-    /// Continuous mapping from her living emotional state — biases, not poses.
-    func setMood(from e: EmotionState) {
-        mood.chill = min(1, max(0, 0.35 * e.sadism + 0.4 * e.jealousy + 0.25 * e.melancholy))
-        mood.glow = min(1, max(0, 0.3 + 0.7 * e.intensity))
-        mood.lidDroop = min(0.42, max(0.06, 0.10 + 0.22 * e.melancholy + 0.12 * e.sadism - 0.08 * e.playfulness))
-        mood.sway = 0.55 + 0.9 * e.playfulness
-        mood.breathDepth = 0.8 + 0.6 * e.intensity
-        mood.chinBias = 0.03 * (e.warmth + e.devotion) / 2 - 0.045 * e.sadism - 0.02 * e.jealousy
-        mood.blinkSpacing = 1 + 0.8 * e.intensity
-        mood.browLift = min(1, max(-1, 0.35 * e.warmth + 0.3 * e.vulnerability - 0.45 * e.sadism - 0.3 * e.jealousy))
-        mood.browArch = 0.25 + 0.6 * e.sadism
-        mood.cornerSet = min(1, max(-1, 0.6 * e.warmth + 0.45 * e.playfulness - 0.55 * e.melancholy - 0.4 * e.jealousy - 0.25 * e.sadism))
-        mood.sneerGain = min(1, 0.15 + 0.75 * (0.7 * e.sadism + 0.3 * e.jealousy))
-        mood.faceLife = 0.6 + 0.5 * e.playfulness + 0.25 * e.intensity
+    /// The user-facing mood meter: the Settings dials, blended half-and-half
+    /// with the living state so both move her visibly.
+    struct MoodDials {
+        var warmth: Double
+        var sadism: Double
+        var intensity: Double
+    }
+
+    /// Continuous mapping from her living emotional state and the mood-meter
+    /// dials — biases, not poses. Everything downstream flows through springs
+    /// and oscillators, so dial changes crossfade instead of snapping.
+    func setMood(from e: EmotionState, dials: MoodDials? = nil) {
+        // Effective posture axes: state ⊕ dials (dials absent = pure state).
+        let d = dials ?? MoodDials(warmth: e.warmth, sadism: e.sadism, intensity: e.intensity)
+        let w = min(1, max(0, 0.5 * e.warmth + 0.5 * d.warmth))
+        let s = min(1, max(0, 0.5 * e.sadism + 0.5 * d.sadism))
+        let i = min(1, max(0, 0.4 * e.intensity + 0.6 * d.intensity))
+
+        // Light: the on-stage read — warm ember cooling as her edge sharpens.
+        mood.chill = min(1, max(0, 0.35 * s + 0.4 * e.jealousy + 0.25 * e.melancholy))
+        mood.glow = min(1, max(0, 0.3 + 0.7 * i))
+
+        // Posture & rhythm.
+        mood.chinBias = 0.030 * w - 0.045 * s - 0.02 * e.jealousy
+        mood.sway = (0.55 + 0.9 * e.playfulness) * (1 - 0.25 * s)  // sharp = stiller
+        mood.breathDepth = 0.8 + 0.6 * i
+        mood.breathPeriodScale = min(1.35, max(0.75, 1 + 0.30 * w - 0.28 * i))
+        mood.leanIn = 0.003 + 0.006 * w
+        mood.glanceSoft = 1 - 0.4 * w
+        mood.microEnergy = 0.85 + 0.30 * i
+
+        // Face.
+        mood.lidDroop = min(0.42, max(0.06, 0.10 + 0.22 * e.melancholy + 0.12 * s - 0.08 * e.playfulness))
+        mood.blinkSpacing = 1 + 0.8 * i
+        mood.browLift = min(1, max(-1, 0.35 * w + 0.3 * e.vulnerability - 0.45 * s - 0.3 * e.jealousy))
+        mood.browArch = 0.25 + 0.6 * s
+        mood.cornerSet = min(1, max(-1, 0.6 * w + 0.45 * e.playfulness - 0.55 * e.melancholy - 0.4 * e.jealousy - 0.25 * s))
+        mood.sneerGain = min(1, 0.15 + 0.75 * (0.7 * s + 0.3 * e.jealousy))
+        mood.faceLife = 0.6 + 0.5 * e.playfulness + 0.25 * i
     }
 
     func tick(dt rawDt: Double) {
@@ -216,14 +245,14 @@ final class AvatarDirector {
 
         // --- Idle field (amplitude eases down, never off, while she speaks) ---
         let idle = 1 - 0.45 * talking
-        let sway = mood.sway * idle
+        let sway = mood.sway * idle * mood.microEnergy
 
         let blinkEnv = blink.tick(dt, intervalScale: mood.blinkSpacing)
         let glanceEnv = glance.tick(dt)
         let swallowEnv = swallow.tick(dt)
         let settleEnv = settle.tick(dt)
 
-        breathPhase += dt * 2 * .pi / breathPeriod.tick(dt)
+        breathPhase += dt * 2 * .pi / (breathPeriod.tick(dt) * mood.breathPeriodScale)
         let breath = (sin(breathPhase) + 1) / 2 * mood.breathDepth + swallowEnv * 0.3
         breathFollow.track(breath, dt: dt, tau: 0.3)  // lagged follow-through
 
@@ -247,10 +276,10 @@ final class AvatarDirector {
         // drifting off-focus during a glance and easing back.
         let tauK = temperament.tauScale
         let yawTarget = gazeYaw.tick(dt) * sway * (1 - 0.65 * talking)
-            + glanceEnv * glance.direction * 0.14
+            + glanceEnv * glance.direction * 0.14 * mood.glanceSoft
         let pitchTarget = lookAtPitch
             + gazePitch.tick(dt) * idle
-            + glanceEnv * abs(glance.direction) * 0.03
+            + glanceEnv * abs(glance.direction) * 0.03 * mood.glanceSoft
             + mood.chinBias * 0.5  // flavor only — never enough to break eye level
             - swallowEnv * 0.03
             + nod.value * 0.06  // nods dip toward you — never a head toss
@@ -264,8 +293,9 @@ final class AvatarDirector {
         let weightTarget = weightX.tick(dt) * mood.sway + settleEnv * settle.direction * 0.011
         weightS.track(weightTarget, dt: dt, tau: 1.6 * tauK)
         rootRollS.track(-weightS.value * 0.9, dt: dt, tau: 1.4 * tauK)
-        // A slight standing lean toward the camera, deepening as she speaks.
-        leanS.track(0.004 + 0.013 * talking * temperament.talkLean, dt: dt, tau: 0.8)
+        // A slight standing lean toward the camera — closer when she's warm,
+        // deepening as she speaks.
+        leanS.track(mood.leanIn + 0.013 * talking * temperament.talkLean, dt: dt, tau: 0.8)
 
         // Mouth: audio drives the jaw; lips keep a faint idle life of their own.
         let jawTarget = pow(speakLevel.value, 0.85) * 0.16 * (0.75 + 0.25 * mood.glow)

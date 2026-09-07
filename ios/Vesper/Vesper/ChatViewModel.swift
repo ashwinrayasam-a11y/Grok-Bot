@@ -54,6 +54,12 @@ final class ChatViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        // Republish dial changes so her look shifts live while sliders drag
+        // (the avatar's springs turn the stream of values into a crossfade).
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     // MARK: - Cast
@@ -62,6 +68,17 @@ final class ChatViewModel: ObservableObject {
     /// Mika holds her own fixed temperament; Chat has no presence at all.
     var presenceEmotion: EmotionState {
         cast.fixedEmotion ?? emotion
+    }
+
+    /// The mood-meter dials (Settings) — Vesper's look shifts with them
+    /// directly; other members hold their own temperament.
+    var presenceDials: AvatarDirector.MoodDials? {
+        guard cast == .vesper else { return nil }
+        return AvatarDirector.MoodDials(
+            warmth: warmthBias,
+            sadism: sadismBias,
+            intensity: intensityBias
+        )
     }
 
     func switchCast(to member: CastMember) {
