@@ -27,6 +27,10 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Presence is procedural-only by design: the 3D rig with per-member
+    /// motion temperament. Video idle loops are explicitly rejected (the
+    /// grainy Grok-export experiment), and nothing here depends on Grok's
+    /// live companion pipeline — only documented xAI APIs for voice.
     var hasPresence: Bool { self != .chat }
 
     var placeholder: String {
