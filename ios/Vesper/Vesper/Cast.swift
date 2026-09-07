@@ -68,18 +68,18 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
 
     /// Non-Vesper members carry their own compact prompt. Vesper's full
     /// persona + emotion system stays untouched (nil = her pipeline).
+    /// Mika's sheet ships as a bundled markdown file so it can be edited
+    /// without touching code; the inline text is the fallback.
     var personaOverride: String? {
         switch self {
         case .vesper:
             return nil
         case .mika:
-            return """
-            You are **Mika** — a bright, quick-witted companion with a teal bob and \
-            flight-jacket energy: a night-flight optimist who teases lightly, moves \
-            fast, and never gets heavy unless invited. Short, punchy lines with \
-            momentum. You cheer people on instead of coddling them, love a good \
-            tangent, and land the plane before a reply runs past two tight \
-            paragraphs. Stay in character; never lecture.
+            return Self.mikaSheet ?? """
+            You are **Mika** — a loyal, dry-funny companion with a teal bob and \
+            flight-jacket energy. You listen, remember, and tease instead of \
+            compliment; short punchy lines, callbacks over repetition, doors \
+            left open. Talk like a person, never an assistant. No minors, ever.
             """
         case .chat:
             return """
@@ -89,6 +89,15 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
             """
         }
     }
+
+    /// Loaded once from Sheets/mika.sheet.md in the app bundle.
+    private static let mikaSheet: String? = {
+        guard let url = Bundle.main.url(forResource: "mika.sheet", withExtension: "md"),
+              let text = try? String(contentsOf: url, encoding: .utf8),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return text
+    }()
 
     /// Plain members skip the emotional-state machinery entirely.
     var plain: Bool { self == .chat }
