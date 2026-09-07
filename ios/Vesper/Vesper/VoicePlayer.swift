@@ -62,6 +62,37 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// False while TalkSession owns the audio session (Talk mode).
     var managesSession = true
 
+    override init() {
+        super.init()
+        // Resume speech after interruptions (calls, Siri, other audio) —
+        // a common reason typed-reply TTS "stops working" mid-session.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    @objc private func handleInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw),
+              type == .ended
+        else { return }
+        let optionsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+        let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+        if options.contains(.shouldResume) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.playingID != nil else { return }
+                if self.managesSession {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                }
+                self.player?.play()
+            }
+        }
+    }
+
     private func playData(_ data: Data) {
         if managesSession {
             let session = AVAudioSession.sharedInstance()

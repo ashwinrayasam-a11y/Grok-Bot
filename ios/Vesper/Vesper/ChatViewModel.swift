@@ -184,8 +184,20 @@ final class ChatViewModel: ObservableObject {
         Task {
             await deliver(text, history: history)
             isThinking = false
+            ensureReplyHasVoice()
             persist()
         }
+    }
+
+    /// Reliability net for typed chat: if the reply landed text-only because
+    /// TTS failed somewhere along the way, fetch one fresh take automatically.
+    private func ensureReplyHasVoice() {
+        guard cast.voiceID != nil,
+              let last = messages.last,
+              last.role == .assistant, !last.isError, !last.hasVoice,
+              !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        regenerateVoice(for: last)
     }
 
     private func recentTurns() -> [Turn] {
