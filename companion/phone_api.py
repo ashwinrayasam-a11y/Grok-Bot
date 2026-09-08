@@ -108,21 +108,35 @@ def _speakable(text: str) -> str:
     return re.sub(r"\s+", " ", _MD_NOISE.sub(" ", text)).strip()[:4000]
 
 
-def _synthesize(text: str, voice: str | None = None) -> tuple[bytes, str] | None:
+def _speed(intensity: float | None) -> float | None:
+    """Energy dial → xAI speaking speed (0.7–1.5 supported; we stay subtle)."""
+    if intensity is None:
+        return None
+    return round(min(1.3, max(0.7, 0.85 + 0.4 * intensity)), 2)
+
+
+def _synthesize(
+    text: str,
+    voice: str | None = None,
+    speed: float | None = None,
+) -> tuple[bytes, str] | None:
     """xAI TTS. Returns (audio bytes, mime) or None when voice is unavailable."""
     key = _xai_key()
     speakable = _speakable(text)
     if not key or not speakable:
         return None
+    payload: dict[str, Any] = {
+        "text": speakable,
+        "voice_id": voice or TTS_VOICE,
+        "language": TTS_LANGUAGE,
+    }
+    if speed is not None:
+        payload["speed"] = speed
     try:
         response = httpx.post(
             TTS_URL,
             headers={"Authorization": f"Bearer {key}"},
-            json={
-                "text": speakable,
-                "voice_id": voice or TTS_VOICE,
-                "language": TTS_LANGUAGE,
-            },
+            json=payload,
             timeout=60,
         )
         response.raise_for_status()
@@ -157,6 +171,12 @@ class ChatRequest(BaseModel):
     voice: str | None = None
     # Reply style: "chat" (conversational, tight) or "narrative" (scene prose).
     reply_style: str | None = None
+    # Voice character from the phone's Her Voice panel. This server's only
+    # mouth is xAI TTS: intensity maps to speaking speed; engine and heat are
+    # accepted for protocol parity (richer Mac forks consume them).
+    tts_engine: str | None = None
+    voice_intensity: float | None = None
+    voice_heat: float | None = None
 
 
 class ChatResponse(BaseModel):
@@ -172,6 +192,9 @@ class ChatResponse(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice: str | None = None  # per-cast voice (defaults to the configured one)
+    tts_engine: str | None = None      # parity; this server's mouth is xAI
+    voice_intensity: float | None = None
+    voice_heat: float | None = None
 
 
 app = FastAPI(title=f"{COMPANION_NAME} phone API", version="1.0.0")
@@ -269,7 +292,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     audio_b64: str | None = None
     audio_mime: str | None = None
     if req.want_audio:
-        audio = _synthesize(reply, voice=req.voice)
+        audio = _synthesize(reply, voice=req.voice, speed=_speed(req.voice_intensity))
         if audio:
             audio_b64 = base64.b64encode(audio[0]).decode("ascii")
             audio_mime = audio[1]
@@ -334,7 +357,11 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             nonlocal seq
             text = segment.strip()
             if req.want_audio and text:
-                pending.append((seq, text, tts.submit(_synthesize, text, req.voice)))
+                pending.append((
+                    seq,
+                    text,
+                    tts.submit(_synthesize, text, req.voice, _speed(req.voice_intensity)),
+                ))
                 seq += 1
 
         def drain(block: bool) -> Iterator[str]:
@@ -407,7 +434,7 @@ def stt(audio: UploadFile = File(...)) -> dict[str, str]:
 
 @app.post("/v1/tts")
 def tts(req: TTSRequest) -> dict[str, str]:
-    audio = _synthesize(req.text, voice=req.voice)
+    audio = _synthesize(req.text, voice=req.voice, speed=_speed(req.voice_intensity))
     if not audio:
         raise HTTPException(
             status_code=503,

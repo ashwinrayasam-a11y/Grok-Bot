@@ -14,6 +14,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.replyStyle) private var replyStyle = "chat"
     @AppStorage(SettingsKeys.speakTypedReplies) private var speakTypedReplies = true
     @AppStorage(SettingsKeys.vesperVoice) private var vesperVoice = SettingsKeys.defaultVesperVoice
+    @AppStorage(SettingsKeys.ttsEngine) private var ttsEngine = SettingsKeys.defaultTTSEngine
+    @AppStorage(SettingsKeys.voiceIntensity) private var voiceIntensity = 0.5
+    @AppStorage(SettingsKeys.voiceHeat) private var voiceHeat = 0.5
 
     @State private var xaiKey: String = Keychain.get(Keychain.xaiKeyAccount) ?? ""
     @State private var knockResult: String?
@@ -79,14 +82,23 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Mouth", selection: $ttsEngine) {
+                        ForEach(SettingsKeys.mouthEngines, id: \.self) { engine in
+                            Text(engine).tag(engine)
+                        }
+                    }
+                    Picker("Voice", selection: $vesperVoice) {
+                        ForEach(SettingsKeys.companionVoices, id: \.self) { voice in
+                            Text(voice).tag(voice)
+                        }
+                    }
+                    LabeledSlider("Energy", value: $voiceIntensity)
+                    LabeledSlider("Horny", value: $voiceHeat)
                     Toggle("Speak typed replies", isOn: $speakTypedReplies)
-                    TextField("Vesper voice (xAI)", text: $vesperVoice)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
                 } header: {
-                    Text("Voice")
+                    Text("Her voice")
                 } footer: {
-                    Text("Spoken turns always answer aloud. Mika speaks with eve; Chat is text only.")
+                    Text("Energy shapes her speaking pace. Mouths beyond ara need a Mac server that carries them; this repo's phone API always speaks through xAI. Mika speaks with eve; Chat is text only.")
                 }
 
                 Section("Presence") {

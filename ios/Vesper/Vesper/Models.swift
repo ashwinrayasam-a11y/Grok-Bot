@@ -84,10 +84,19 @@ enum SettingsKeys {
     static let replyStyle = "replyStyle"              // "chat" | "narrative"
     static let speakTypedReplies = "speakTypedReplies"
     static let vesperVoice = "vesperVoice"
+    static let ttsEngine = "ttsEngine"                // the Mouth
+    static let voiceIntensity = "voiceIntensity"      // Energy dial
+    static let voiceHeat = "voiceHeat"                // Horny dial
 
     static let defaultMacURL = "http://Ashs-MacBook-Pro.local:7861"
     static let defaultAwayModel = "grok-4"
     static let defaultVesperVoice = "ara"
+    static let defaultTTSEngine = "ara"
+
+    /// Her Voice pickers. Engines beyond `ara` (xAI) are consumed by richer
+    /// Mac servers; this repo's phone_api always speaks through xAI.
+    static let mouthEngines = ["chatterbox", "kokoro", "csm", "flux", "ara"]
+    static let companionVoices = ["ara", "eve", "luna", "aurora", "liora", "celeste"]
 }
 
 // MARK: - Persistence

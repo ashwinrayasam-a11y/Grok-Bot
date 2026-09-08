@@ -49,6 +49,10 @@ struct MacChatRequest: Encodable {
     var voice: String?
     /// "chat" (tight, conversational) or "narrative" (scene prose).
     var replyStyle: String?
+    /// Her Voice panel: mouth engine, energy, heat (server maps what it can).
+    var ttsEngine: String?
+    var voiceIntensity: Double?
+    var voiceHeat: Double?
 }
 
 struct MacChatResponse: Decodable {
@@ -147,10 +151,19 @@ struct MacLink {
     }
 
     /// Fresh TTS take from the Mac (POST /v1/tts) — used by Regenerate.
-    func tts(text: String, voice: String?) async throws -> Data {
+    func tts(
+        text: String,
+        voice: String?,
+        engine: String? = nil,
+        intensity: Double? = nil,
+        heat: Double? = nil
+    ) async throws -> Data {
         struct TTSRequestBody: Encodable {
             var text: String
             var voice: String?
+            var ttsEngine: String?
+            var voiceIntensity: Double?
+            var voiceHeat: Double?
         }
         struct TTSResponseBody: Decodable {
             var audioB64: String
@@ -159,7 +172,15 @@ struct MacLink {
         request.httpMethod = "POST"
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try snakeEncoder().encode(TTSRequestBody(text: text, voice: voice))
+        request.httpBody = try snakeEncoder().encode(
+            TTSRequestBody(
+                text: text,
+                voice: voice,
+                ttsEngine: engine,
+                voiceIntensity: intensity,
+                voiceHeat: heat
+            )
+        )
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1

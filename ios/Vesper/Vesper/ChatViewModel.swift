@@ -46,6 +46,9 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.replyStyle: "chat",
             SettingsKeys.speakTypedReplies: true,
             SettingsKeys.vesperVoice: SettingsKeys.defaultVesperVoice,
+            SettingsKeys.ttsEngine: SettingsKeys.defaultTTSEngine,
+            SettingsKeys.voiceIntensity: 0.5,
+            SettingsKeys.voiceHeat: 0.5,
         ])
         if let raw = defaults.string(forKey: "castMember"),
            let saved = CastMember(rawValue: raw) {
@@ -162,6 +165,11 @@ final class ChatViewModel: ObservableObject {
     private var speakTypedReplies: Bool {
         defaults.bool(forKey: SettingsKeys.speakTypedReplies)
     }
+    private var ttsEngine: String {
+        defaults.string(forKey: SettingsKeys.ttsEngine) ?? SettingsKeys.defaultTTSEngine
+    }
+    private var voiceIntensity: Double { defaults.double(forKey: SettingsKeys.voiceIntensity) }
+    private var voiceHeat: Double { defaults.double(forKey: SettingsKeys.voiceHeat) }
     /// Per-cast TTS voice; Vesper's is user-tunable in Settings.
     private var effectiveVoiceID: String? {
         switch cast {
@@ -453,7 +461,10 @@ final class ChatViewModel: ObservableObject {
             personaOverride: cast.personaOverride,
             plain: cast.plain,
             voice: effectiveVoiceID,
-            replyStyle: replyStyle
+            replyStyle: replyStyle,
+            ttsEngine: ttsEngine,
+            voiceIntensity: voiceIntensity,
+            voiceHeat: voiceHeat
         )
     }
 
@@ -494,6 +505,21 @@ final class ChatViewModel: ObservableObject {
         messages.append(ChatMessage(role: .assistant, text: text, isError: true))
     }
 
+    // MARK: - Mood editing (the sheet's live sliders)
+
+    private var emotionPersistTask: Task<Void, Never>?
+
+    /// Slider writes: immediate for her behavior, debounced for disk.
+    func updateEmotion(_ axis: WritableKeyPath<EmotionState, Double>, to value: Double) {
+        emotion[keyPath: axis] = min(1, max(0, value))
+        emotionPersistTask?.cancel()
+        emotionPersistTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.persist()
+        }
+    }
+
     // MARK: - Voice regeneration
 
     @Published private(set) var regeneratingID: UUID?
@@ -510,7 +536,13 @@ final class ChatViewModel: ObservableObject {
         Task {
             var clip: Data?
             if let link = MacLink(urlString: macURLString), await link.isAwake() {
-                clip = try? await link.tts(text: text, voice: voiceID)
+                clip = try? await link.tts(
+                    text: text,
+                    voice: voiceID,
+                    engine: ttsEngine,
+                    intensity: voiceIntensity,
+                    heat: voiceHeat
+                )
             }
             if clip == nil, let key = xaiKey {
                 clip = try? await XAILink(apiKey: key, model: awayModel).speak(text, voice: voiceID)

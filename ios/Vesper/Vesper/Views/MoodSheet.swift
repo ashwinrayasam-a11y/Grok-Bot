@@ -1,46 +1,47 @@
 import SwiftUI
 
-/// Her inner weather — the same bars the Gradio mood panel shows.
+/// Her inner weather — every axis a live slider. Drag it and she *is* it:
+/// writes go straight into the living EmotionState and persist.
 struct MoodSheet: View {
     @EnvironmentObject private var model: ChatViewModel
+
+    private let axes: [(String, WritableKeyPath<EmotionState, Double>)] = [
+        ("devotion", \.devotion),
+        ("warmth", \.warmth),
+        ("sadism", \.sadism),
+        ("trust", \.trust),
+        ("jealousy", \.jealousy),
+        ("vulnerability", \.vulnerability),
+        ("playfulness", \.playfulness),
+        ("melancholy", \.melancholy),
+        ("intensity", \.intensity),
+        ("bond", \.bond),
+    ]
 
     var body: some View {
         ZStack {
             VesperBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     Text(model.emotion.moodLabel)
                         .font(VesperTheme.display(28))
                         .foregroundStyle(VesperTheme.ink)
                         .padding(.bottom, 2)
+                        .animation(.easeInOut(duration: 0.2), value: model.emotion.moodLabel)
 
-                    ForEach(model.emotion.axes, id: \.0) { name, value in
-                        VStack(alignment: .leading, spacing: 6) {
+                    ForEach(axes, id: \.0) { name, keyPath in
+                        VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Text(name)
                                     .font(.caption.smallCaps())
                                     .foregroundStyle(VesperTheme.mute)
                                 Spacer()
-                                Text("\(Int(value * 100))%")
+                                Text("\(Int(model.emotion[keyPath: keyPath] * 100))%")
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(VesperTheme.mute)
                             }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule()
-                                        .fill(VesperTheme.panel)
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [VesperTheme.ember, VesperTheme.rose],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
-                                            )
-                                        )
-                                        .frame(width: max(4, geo.size.width * value))
-                                }
-                            }
-                            .frame(height: 6)
+                            Slider(value: binding(for: keyPath), in: 0...1)
+                                .tint(VesperTheme.ember)
                         }
                     }
                 }
@@ -49,5 +50,12 @@ struct MoodSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func binding(for keyPath: WritableKeyPath<EmotionState, Double>) -> Binding<Double> {
+        Binding(
+            get: { model.emotion[keyPath: keyPath] },
+            set: { model.updateEmotion(keyPath, to: $0) }
+        )
     }
 }
