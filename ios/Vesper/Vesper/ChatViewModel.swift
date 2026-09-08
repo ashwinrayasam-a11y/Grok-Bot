@@ -247,29 +247,72 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Voice input
 
+    private var currentHearingTake: UUID?
+
     /// A finished mic take: transcribe (Mac Whisper at home, on-device
     /// Whisper away — never Apple Speech), then send like typed text.
+    /// Time-boxed so a hung transcription can never freeze the Talk loop.
     func heard(_ fileURL: URL) {
         guard !isHearing else { return }
         isHearing = true
         hearingStatus = "hearing you…"
+        let take = UUID()
+        currentHearingTake = take
+        Task {
+            try? await Task.sleep(for: .seconds(30))
+            if isHearing, currentHearingTake == take {
+                currentHearingTake = nil
+                isHearing = false
+                hearingStatus = nil
+                banner = "Transcription timed out — try again."
+            }
+        }
         Task {
             do {
                 let text = try await transcribe(fileURL)
+                guard currentHearingTake == take else {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return  // timed out; a late result must not become a message
+                }
+                currentHearingTake = nil
                 isHearing = false
                 hearingStatus = nil
                 if text.isEmpty {
                     banner = "Didn't catch anything — try again."
+                } else if isLikelyEcho(text) {
+                    banner = "That was my own voice — ignored."
                 } else {
                     send(text, spoken: true)
                 }
             } catch {
+                guard currentHearingTake == take else {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                currentHearingTake = nil
                 isHearing = false
                 hearingStatus = nil
                 banner = "Couldn't transcribe — \(error.localizedDescription)"
             }
             try? FileManager.default.removeItem(at: fileURL)
         }
+    }
+
+    /// Ghost filter: a transcript that is mostly words from her last reply is
+    /// speaker bleed, not him.
+    private func isLikelyEcho(_ transcript: String) -> Bool {
+        guard let last = messages.last(where: { $0.role == .assistant && !$0.isError }) else {
+            return false
+        }
+        let words = transcript.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        guard words.count >= 5 else { return false }
+        let replyWords = Set(
+            last.text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        )
+        let hits = words.filter { replyWords.contains($0) }.count
+        return Double(hits) / Double(words.count) >= 0.8
     }
 
     private func transcribe(_ fileURL: URL) async throws -> String {
@@ -315,6 +358,7 @@ final class ChatViewModel: ObservableObject {
     private func ensureReplyHasVoice() {
         guard effectiveVoiceID != nil,
               let last = messages.last,
+              last.id != pendingVoiceID,  // chunked speech is already on its way
               last.role == .assistant, !last.isError, !last.hasVoice,
               !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
@@ -488,11 +532,69 @@ final class ChatViewModel: ObservableObject {
         system += styleRider
         let xai = XAILink(apiKey: key, model: awayModel)
         let reply = try await xai.chat(system: system, history: history, user: text)
-        var audio: Data?
-        if wantVoice, let voiceID = effectiveVoiceID {
-            audio = try? await xai.speak(reply, voice: voiceID)
+        // Text lands immediately; the voice arrives sentence-by-sentence
+        // instead of one mega-clip after everything is synthesized.
+        appendReply(reply, audio: nil)
+        if wantVoice, let voiceID = effectiveVoiceID, let id = messages.last?.id {
+            speakAwayChunks(reply, messageID: id, xai: xai, voiceID: voiceID)
         }
-        appendReply(reply, audio: audio)
+    }
+
+    /// A reply currently having its voice synthesized chunk-by-chunk.
+    private var pendingVoiceID: UUID?
+
+    /// Away-leg speech: first sentence alone (she starts talking fast), the
+    /// rest in ~180-char sentence groups, each enqueued as it lands.
+    private func speakAwayChunks(
+        _ text: String, messageID: UUID, xai: XAILink, voiceID: String
+    ) {
+        pendingVoiceID = messageID
+        Task {
+            for chunk in Self.speechChunks(text) {
+                guard let clip = try? await xai.speak(chunk, voice: voiceID) else { continue }
+                let seconds = VoicePlayer.duration(of: clip)
+                mutateMessage(messageID) { message in
+                    var clips = message.audioClips ?? []
+                    clips.append(clip)
+                    message.audioClips = clips
+                    message.audioSeconds = (message.audioSeconds ?? 0) + (seconds ?? 0)
+                }
+                voice.enqueue(clip, for: messageID)
+            }
+            pendingVoiceID = nil
+            persist()
+        }
+    }
+
+    static func speechChunks(_ text: String) -> [String] {
+        var sentences: [String] = []
+        let ns = text as NSString
+        let pattern = "[^.!?…]+[.!?…]+[\"')\\]]*\\s*|[^.!?…]+\\s*$"
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            regex.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                match, _, _ in
+                if let range = match?.range {
+                    let s = ns.substring(with: range)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !s.isEmpty { sentences.append(s) }
+                }
+            }
+        }
+        guard sentences.count > 1 else { return [text] }
+        var chunks = [sentences[0]]
+        var current = ""
+        for sentence in sentences.dropFirst() {
+            if current.isEmpty {
+                current = sentence
+            } else if current.count + sentence.count < 180 {
+                current += " " + sentence
+            } else {
+                chunks.append(current)
+                current = sentence
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
     }
 
     private func macPayload(

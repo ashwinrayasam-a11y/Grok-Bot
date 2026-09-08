@@ -11,6 +11,9 @@ struct ChatView: View {
     @State private var showMood = false
     @State private var showThreads = false
     @State private var talkOn = false
+    /// When her last clip finished — the mic holds off until echo dies.
+    @State private var lastSpokeAt: Date?
+    @State private var talkWatchdog: Task<Void, Never>?
     @AppStorage("stageTall") private var stageTall = false
     @AppStorage("chatVisible") private var chatVisible = true
 
@@ -48,11 +51,24 @@ struct ChatView: View {
                 recorder.deniedReason = nil
             }
         }
-        // Talk loop: when her reply finishes speaking (or a voiceless turn
-        // completes), re-arm the mic after a beat.
-        .onChange(of: model.voice.playingID) { maybeRearmTalk() }
+        // Talk loop. The one hard rule: her voice and the mic NEVER overlap.
+        .onChange(of: model.voice.playingID) {
+            if model.voice.playingID != nil {
+                // She started speaking — if the mic is open, close it and
+                // throw the take away (it would contain her own voice).
+                if talkOn && recorder.isRecording {
+                    recorder.cancel()
+                }
+            } else {
+                lastSpokeAt = Date()
+                maybeRearmTalk()
+            }
+        }
         .onChange(of: model.isThinking) {
             if !model.isThinking { maybeRearmTalk() }
+        }
+        .onChange(of: model.isHearing) {
+            if !model.isHearing { maybeRearmTalk() }
         }
         .onChange(of: model.cast) {
             if talkOn { setTalk(false) }
@@ -367,15 +383,27 @@ struct ChatView: View {
     private func setTalk(_ on: Bool) {
         talkOn = on
         if on {
-            // One long-lived voiceChat session owns audio for the whole
-            // conversation — this is also what keeps Talk alive when the app
-            // is backgrounded (UIBackgroundModes: audio).
+            // One long-lived voiceChat session (with system echo cancellation)
+            // owns audio for the whole conversation — also what keeps Talk
+            // alive in the background (UIBackgroundModes: audio).
             TalkSession.begin()
             recorder.managesSession = false
             model.voice.managesSession = false
             recorder.autoStopOnSilence = true
-            startListening()
+            // Never open the mic blind: if she's mid-sentence or a turn is in
+            // flight, the re-arm machinery opens it when the air is clear.
+            maybeRearmTalk()
+            talkWatchdog?.cancel()
+            talkWatchdog = Task {
+                // Safety net: fully guarded, so the worst it does is nothing.
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(3))
+                    maybeRearmTalk()
+                }
+            }
         } else {
+            talkWatchdog?.cancel()
+            talkWatchdog = nil
             recorder.autoStopOnSilence = false
             recorder.cancel()
             model.voice.stop()
@@ -385,15 +413,21 @@ struct ChatView: View {
         }
     }
 
+    /// Re-arm the mic only when the air is clear: nothing recording, nothing
+    /// thinking, nothing transcribing, nothing playing — and her last clip at
+    /// least ~1.5 s gone, so speaker echo can't become the next message.
     private func maybeRearmTalk() {
         guard talkOn, !recorder.isRecording, !model.isThinking, !model.isHearing,
               model.voice.playingID == nil
         else { return }
         Task {
-            try? await Task.sleep(for: .milliseconds(350))
+            let sinceSpeech = lastSpokeAt.map { Date().timeIntervalSince($0) } ?? .infinity
+            let wait = max(0.5, 1.6 - sinceSpeech)
+            try? await Task.sleep(for: .seconds(wait))
+            let clearedEcho = lastSpokeAt.map { Date().timeIntervalSince($0) >= 1.45 } ?? true
             guard talkOn, !recorder.isRecording, !model.isThinking, !model.isHearing,
-                  model.voice.playingID == nil
-            else { return }
+                  model.voice.playingID == nil, clearedEcho
+            else { return }  // a queued clip resumed or a turn started — its end will retrigger
             await recorder.start()
         }
     }
