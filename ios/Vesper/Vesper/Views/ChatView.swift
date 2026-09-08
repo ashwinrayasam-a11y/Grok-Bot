@@ -61,7 +61,10 @@ struct ChatView: View {
             CastBackdrop(cast: model.cast)
                 .ignoresSafeArea()
 
+            // Header lives in the layout (not a safe-area inset) so its menus
+            // always hit-test, no matter what the stage underneath is doing.
             VStack(spacing: 0) {
+                header
                 if model.cast.hasPresence {
                     stage
                 }
@@ -84,7 +87,6 @@ struct ChatView: View {
                     )
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) { header }
             .animation(.spring(response: 0.45, dampingFraction: 0.9), value: showChat)
         }
     }
@@ -153,10 +155,34 @@ struct ChatView: View {
             }
 
             Menu {
+                Button {
+                    model.newThread()
+                } label: {
+                    Label("New chat", systemImage: "square.and.pencil")
+                }
+                if !model.threads.isEmpty {
+                    Menu {
+                        ForEach(model.threads.prefix(12)) { thread in
+                            Button {
+                                model.openThread(thread.id)
+                            } label: {
+                                if thread.id == model.currentThreadID {
+                                    Label(thread.title, systemImage: "checkmark")
+                                } else {
+                                    Text(thread.title)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Threads", systemImage: "text.justify.left")
+                    }
+                }
+                Divider()
                 if model.cast == .vesper {
                     Button("Mood") { showMood = true }
                 }
                 Button("Settings") { showSettings = true }
+                Divider()
                 Button("Clear conversation", role: .destructive) {
                     MarkdownStore.clear()
                     model.resetSoul()

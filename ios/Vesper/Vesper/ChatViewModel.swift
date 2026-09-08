@@ -12,6 +12,8 @@ final class ChatViewModel: ObservableObject {
     @Published var isHearing = false
     @Published var hearingStatus: String?
     @Published private(set) var cast: CastMember = .vesper
+    @Published private(set) var threads: [ThreadMeta] = []
+    @Published private(set) var currentThreadID = UUID()
     /// Bumped (throttled) while tokens stream so the view can follow the text
     /// without issuing a scroll command per token.
     @Published private(set) var scrollPulse = 0
@@ -46,10 +48,12 @@ final class ChatViewModel: ObservableObject {
            let saved = CastMember(rawValue: raw) {
             cast = saved
         }
-        if let snapshot = SoulStore.load(for: cast) {
+        currentThreadID = resolveThread(for: cast)
+        if let snapshot = SoulStore.load(for: cast, thread: currentThreadID) {
             emotion = snapshot.emotion
             messages = snapshot.messages
         }
+        threads = SoulStore.threads(for: cast)
         // Republish the nested player's changes so voice chips update.
         voice.objectWillChange
             .receive(on: RunLoop.main)
@@ -69,15 +73,71 @@ final class ChatViewModel: ObservableObject {
         guard member != cast else { return }
         voice.stop()
         persist()
+        MarkdownStore.clear()
         cast = member
         defaults.set(member.rawValue, forKey: "castMember")
-        let snapshot = SoulStore.load(for: member)
+        currentThreadID = resolveThread(for: member)
+        let snapshot = SoulStore.load(for: member, thread: currentThreadID)
         emotion = snapshot?.emotion ?? EmotionState()
         messages = snapshot?.messages ?? []
+        threads = SoulStore.threads(for: member)
         isThinking = false
         isHearing = false
         hearingStatus = nil
         banner = nil
+    }
+
+    // MARK: - Threads
+
+    /// A clean page: fresh thread, fresh mood, same cast.
+    func newThread() {
+        persist()
+        voice.stop()
+        MarkdownStore.clear()
+        currentThreadID = UUID()
+        defaults.set(currentThreadID.uuidString, forKey: threadKey(for: cast))
+        messages = []
+        emotion = EmotionState()
+        isThinking = false
+        isHearing = false
+        hearingStatus = nil
+        persist()
+    }
+
+    func openThread(_ id: UUID) {
+        guard id != currentThreadID else { return }
+        persist()
+        voice.stop()
+        MarkdownStore.clear()
+        currentThreadID = id
+        defaults.set(id.uuidString, forKey: threadKey(for: cast))
+        let snapshot = SoulStore.load(for: cast, thread: id)
+        emotion = snapshot?.emotion ?? EmotionState()
+        messages = snapshot?.messages ?? []
+        isThinking = false
+    }
+
+    private func threadKey(for member: CastMember) -> String {
+        "currentThread-\(member.rawValue)"
+    }
+
+    private func resolveThread(for member: CastMember) -> UUID {
+        if let raw = defaults.string(forKey: threadKey(for: member)),
+           let id = UUID(uuidString: raw) {
+            return id
+        }
+        if let migrated = SoulStore.migrateLegacy(for: member) {
+            defaults.set(migrated.uuidString, forKey: threadKey(for: member))
+            return migrated
+        }
+        let fresh = UUID()
+        defaults.set(fresh.uuidString, forKey: threadKey(for: member))
+        return fresh
+    }
+
+    private var threadTitle: String {
+        messages.first(where: { $0.role == .user })
+            .map { String($0.text.prefix(42)) } ?? "New chat"
     }
 
     // MARK: - Settings
@@ -189,10 +249,15 @@ final class ChatViewModel: ObservableObject {
             .map { Turn(role: $0.role.rawValue, content: $0.text) }
     }
 
-    /// Prefer home on the Mac; fall back to Grok direct when away.
+    /// Once-per-transition note when we slide from Home to Away.
+    private var notedAwayFallback = false
+
+    /// Prefer home on the Mac; fall back to the Away key seamlessly — a
+    /// sleeping Mac should never block the conversation.
     private func deliver(_ text: String, history: [Turn]) async {
         if let link = MacLink(urlString: macURLString), await link.isAwake() {
             mode = .home
+            notedAwayFallback = false
             do {
                 try await sendViaMac(link, text: text, history: history)
                 return
@@ -210,6 +275,10 @@ final class ChatViewModel: ObservableObject {
 
         if let key = xaiKey {
             mode = .away
+            if !notedAwayFallback {
+                notedAwayFallback = true
+                banner = "Mac offline · using Away"
+            }
             do {
                 try await sendViaXAI(key: key, text: text, history: history)
                 return
@@ -219,7 +288,7 @@ final class ChatViewModel: ObservableObject {
             }
         } else {
             mode = .offline
-            banner = "The Mac is unreachable and no xAI key is saved."
+            banner = "Mac offline and no Away key in Settings — add an xAI key to keep chatting."
             appendQuiet(nil)
         }
     }
@@ -464,15 +533,21 @@ final class ChatViewModel: ObservableObject {
         voice.stop()
         messages = []
         emotion = EmotionState()
-        SoulStore.wipe(for: cast)
+        persist()
     }
 
     /// Encoding voice clips to JSON is heavy — never on the main actor.
     private func persist() {
         let snapshot = SoulSnapshot(emotion: emotion, messages: messages)
         let member = cast
+        let threadID = currentThreadID
+        let title = threadTitle
+        // Optimistic index update so the menu reflects reality immediately.
+        var list = threads.filter { $0.id != threadID }
+        list.insert(ThreadMeta(id: threadID, title: title, updatedAt: Date()), at: 0)
+        threads = list
         Task.detached(priority: .utility) {
-            SoulStore.save(snapshot, for: member)
+            SoulStore.save(snapshot, for: member, thread: threadID, title: title)
         }
     }
 }

@@ -94,27 +94,50 @@ struct SoulSnapshot: Codable {
     var messages: [ChatMessage]
 }
 
+/// One conversation thread, as the picker sees it.
+struct ThreadMeta: Codable, Identifiable, Equatable {
+    var id: UUID
+    var title: String
+    var updatedAt: Date
+}
+
 enum SoulStore {
-    private static func fileURL(for member: CastMember) -> URL? {
-        guard
-            let base = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first
-        else { return nil }
-        return base.appendingPathComponent("Vesper/soul-\(member.rawValue).json")
+    private static var baseDir: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("Vesper")
     }
 
-    static func load(for member: CastMember) -> SoulSnapshot? {
-        guard let url = fileURL(for: member), let data = try? Data(contentsOf: url) else {
+    private static func threadURL(_ member: CastMember, _ id: UUID) -> URL? {
+        baseDir?.appendingPathComponent("soul-\(member.rawValue)-\(id.uuidString).json")
+    }
+
+    private static func indexURL(_ member: CastMember) -> URL? {
+        baseDir?.appendingPathComponent("threads-\(member.rawValue).json")
+    }
+
+    static func threads(for member: CastMember) -> [ThreadMeta] {
+        guard let url = indexURL(member), let data = try? Data(contentsOf: url),
+              let list = try? JSONDecoder().decode([ThreadMeta].self, from: data)
+        else { return [] }
+        return list.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    static func load(for member: CastMember, thread id: UUID) -> SoulSnapshot? {
+        guard let url = threadURL(member, id), let data = try? Data(contentsOf: url) else {
             return nil
         }
         return try? JSONDecoder().decode(SoulSnapshot.self, from: data)
     }
 
     /// Synchronous file write — call it off the main actor (encoding voice
-    /// clips to base64 is the heavy part and used to hitch the UI).
-    static func save(_ snapshot: SoulSnapshot, for member: CastMember) {
-        guard let url = fileURL(for: member) else { return }
+    /// clips to base64 is the heavy part). Also upserts the thread index.
+    static func save(
+        _ snapshot: SoulSnapshot,
+        for member: CastMember,
+        thread id: UUID,
+        title: String
+    ) {
+        guard let url = threadURL(member, id) else { return }
         var snap = snapshot
         // Keep the file light: cap history, keep voice data only for recent replies.
         snap.messages = Array(snap.messages.suffix(200))
@@ -132,13 +155,33 @@ enum SoulStore {
             )
             let data = try JSONEncoder().encode(snap)
             try data.write(to: url, options: .atomic)
+            upsertIndex(ThreadMeta(id: id, title: title, updatedAt: Date()), for: member)
         } catch {
             // Persistence is best-effort; the living state stays in memory.
         }
     }
 
-    static func wipe(for member: CastMember) {
-        guard let url = fileURL(for: member) else { return }
-        try? FileManager.default.removeItem(at: url)
+    private static func upsertIndex(_ meta: ThreadMeta, for member: CastMember) {
+        guard let url = indexURL(member) else { return }
+        var list = threads(for: member)
+        list.removeAll { $0.id == meta.id }
+        list.insert(meta, at: 0)
+        if let data = try? JSONEncoder().encode(Array(list.prefix(40))) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Adopt a pre-threads save file as the first thread, once.
+    static func migrateLegacy(for member: CastMember) -> UUID? {
+        guard let legacy = baseDir?.appendingPathComponent("soul-\(member.rawValue).json"),
+              let data = try? Data(contentsOf: legacy),
+              let snap = try? JSONDecoder().decode(SoulSnapshot.self, from: data)
+        else { return nil }
+        let id = UUID()
+        let title = snap.messages.first(where: { $0.role == .user })
+            .map { String($0.text.prefix(42)) } ?? "Earlier"
+        save(snap, for: member, thread: id, title: title)
+        try? FileManager.default.removeItem(at: legacy)
+        return id
     }
 }
