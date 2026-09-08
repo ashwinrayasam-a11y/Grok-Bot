@@ -91,7 +91,10 @@ enum SettingsKeys {
 
     static let defaultMacURL = "http://Ashs-MacBook-Pro.local:7861"
     static let defaultAwayModel = "grok-4"
+    static let mikaVoice = "mikaVoice"
+
     static let defaultVesperVoice = "ara"
+    static let defaultMikaVoice = "eve"
     static let defaultTTSEngine = "ara"
 
     /// Her Voice pickers. Engines beyond `ara` (xAI) are consumed by richer

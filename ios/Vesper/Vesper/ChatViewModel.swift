@@ -46,6 +46,7 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.replyStyle: "chat",
             SettingsKeys.speakTypedReplies: true,
             SettingsKeys.vesperVoice: SettingsKeys.defaultVesperVoice,
+            SettingsKeys.mikaVoice: SettingsKeys.defaultMikaVoice,
             SettingsKeys.ttsEngine: SettingsKeys.defaultTTSEngine,
             SettingsKeys.voiceIntensity: 0.5,
             SettingsKeys.voiceHeat: 0.5,
@@ -171,18 +172,31 @@ final class ChatViewModel: ObservableObject {
     }
     private var voiceIntensity: Double { defaults.double(forKey: SettingsKeys.voiceIntensity) }
     private var voiceHeat: Double { defaults.double(forKey: SettingsKeys.voiceHeat) }
-    /// Per-cast TTS voice; Vesper's is user-tunable in Settings.
+    /// Per-cast TTS voice; Vesper's and Mika's are user-tunable in Settings.
     private var effectiveVoiceID: String? {
+        func stored(_ key: String, fallback: String) -> String {
+            let custom = defaults.string(forKey: key)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (custom?.isEmpty == false) ? custom! : fallback
+        }
         switch cast {
         case .vesper:
-            let custom = defaults.string(forKey: SettingsKeys.vesperVoice)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (custom?.isEmpty == false) ? custom : SettingsKeys.defaultVesperVoice
+            return stored(SettingsKeys.vesperVoice, fallback: SettingsKeys.defaultVesperVoice)
         case .mika:
-            return "eve"
+            return stored(SettingsKeys.mikaVoice, fallback: SettingsKeys.defaultMikaVoice)
         case .chat:
             return nil
         }
+    }
+
+    /// Generic mood rider for override casts (Mika) on the Away leg — same
+    /// line the Mac appends, so her sliders matter on both paths.
+    private func vibeLine(_ e: EmotionState) -> String {
+        String(
+            format: "\n\nCurrent vibe (0-1): warmth %.2f, playfulness %.2f, "
+                + "intensity %.2f, melancholy %.2f. Let it color your tone, not your content.",
+            e.warmth, e.playfulness, e.intensity, e.melancholy
+        )
     }
     /// Reply-style rider appended to Away prompts (the Mac appends its own).
     private var styleRider: String {
@@ -460,6 +474,9 @@ final class ChatViewModel: ObservableObject {
         var system: String
         if let override = cast.personaOverride {
             system = override
+            if !cast.plain {
+                system += vibeLine(emotion)
+            }
         } else {
             // Vesper: same turn pipeline the Mac runs, mirrored on device.
             emotion.blendIntensity(toward: intensityBias)

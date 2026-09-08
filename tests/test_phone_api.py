@@ -246,6 +246,37 @@ def test_tts_endpoint_voice_passthrough(monkeypatch):
     assert base64.b64decode(r.json()["audio_b64"]) == b"take2"
 
 
+def test_override_vibe_rider(monkeypatch):
+    captured = {}
+
+    def spy_stream(**kw):
+        captured.update(kw)
+        yield "roger."
+
+    monkeypatch.setattr(phone_api, "stream_chat", spy_stream)
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None, speed=None: None)
+
+    # Mika (non-plain override): her sliders reach the prompt as a vibe line.
+    client.post(
+        "/v1/chat",
+        json={
+            "message": "hey",
+            "persona_override": "You are Mika.",
+            "state": {"warmth": 0.9, "playfulness": 0.8},
+        },
+    )
+    system = captured["messages"][0]["content"]
+    assert "Current vibe" in system
+    assert "warmth 0.90" in system
+
+    # Plain Chat stays vibe-free.
+    client.post(
+        "/v1/chat",
+        json={"message": "hey", "persona_override": "You are an assistant.", "plain": True},
+    )
+    assert "Current vibe" not in captured["messages"][0]["content"]
+
+
 def test_reply_style_riders(monkeypatch):
     captured = {}
 

@@ -253,8 +253,16 @@ def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
         system = req.persona_override
         if req.user_name.strip():
             system += f"\n\nThey go by: {req.user_name.strip()}. Prefer this name."
-        if not req.plain and req.notes.strip():
-            system += f"\n\n## Private notes from them\n{req.notes.strip()}"
+        if not req.plain:
+            if req.notes.strip():
+                system += f"\n\n## Private notes from them\n{req.notes.strip()}"
+            # Generic mood rider so non-Vesper companions (Mika) get real,
+            # adjustable vibes without borrowing Vesper's inner-state prose.
+            system += (
+                f"\n\nCurrent vibe (0-1): warmth {state.warmth:.2f}, "
+                f"playfulness {state.playfulness:.2f}, intensity {state.intensity:.2f}, "
+                f"melancholy {state.melancholy:.2f}. Let it color your tone, not your content."
+            )
         system += _style_rider(req.reply_style)
         return state, history_to_messages(history, system, message)
 

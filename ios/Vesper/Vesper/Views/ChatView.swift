@@ -96,31 +96,11 @@ struct ChatView: View {
         }
     }
 
-    /// Thin floating header: name as the cast switcher, one menu. Nothing else.
+    /// Thin header: every space visible at once — Vesper, Mika, and Chat are
+    /// pages you step into (tap a pill or swipe the stage), not a dropdown.
     private var header: some View {
         HStack {
-            Menu {
-                ForEach(CastMember.allCases) { member in
-                    Button {
-                        model.switchCast(to: member)
-                    } label: {
-                        if member == model.cast {
-                            Label(member.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(member.displayName)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(model.cast.displayName)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(VesperTheme.ink)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(VesperTheme.mute)
-                }
-            }
+            castPills
 
             Spacer()
 
@@ -171,7 +151,7 @@ struct ChatView: View {
                     Label("Threads…", systemImage: "text.justify.left")
                 }
                 Divider()
-                if model.cast == .vesper {
+                if model.cast != .chat {
                     Button("Mood") { showMood = true }
                 }
                 Button("Settings") { showSettings = true }
@@ -221,6 +201,63 @@ struct ChatView: View {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
                 stageTall.toggle()
             }
+        }
+        // Swipe between spaces, like flipping pages.
+        .gesture(
+            DragGesture(minimumDistance: 40).onEnded { value in
+                let all = CastMember.allCases
+                guard let index = all.firstIndex(of: model.cast) else { return }
+                if value.translation.width < -60, index < all.count - 1 {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        model.switchCast(to: all[index + 1])
+                    }
+                } else if value.translation.width > 60, index > 0 {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        model.switchCast(to: all[index - 1])
+                    }
+                }
+            }
+        )
+    }
+
+    /// The page switcher: all three worlds, each set in its own type.
+    private var castPills: some View {
+        HStack(spacing: 6) {
+            ForEach(CastMember.allCases) { member in
+                Button {
+                    guard member != model.cast else { return }
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        model.switchCast(to: member)
+                    }
+                } label: {
+                    Text(member.displayName)
+                        .font(Self.pillFont(for: member))
+                        .foregroundStyle(member == model.cast ? VesperTheme.ink : VesperTheme.mute)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(
+                                member == model.cast ? member.accent.opacity(0.16) : .clear
+                            )
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(
+                                member == model.cast ? member.accent.opacity(0.45) : .clear,
+                                lineWidth: 1
+                            )
+                        )
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private static func pillFont(for member: CastMember) -> Font {
+        switch member {
+        case .vesper: return .system(size: 14, weight: .semibold, design: .serif)
+        case .mika: return .system(size: 14, weight: .semibold, design: .rounded)
+        case .chat: return .system(size: 14, weight: .medium)
         }
     }
 

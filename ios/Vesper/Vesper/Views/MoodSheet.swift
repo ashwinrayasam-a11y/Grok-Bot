@@ -41,7 +41,7 @@ struct MoodSheet: View {
                                     .foregroundStyle(VesperTheme.mute)
                             }
                             Slider(value: binding(for: keyPath), in: 0...1)
-                                .tint(VesperTheme.ember)
+                                .tint(model.cast.accent)
                         }
                     }
                 }

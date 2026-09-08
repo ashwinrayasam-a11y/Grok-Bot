@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.replyStyle) private var replyStyle = "chat"
     @AppStorage(SettingsKeys.speakTypedReplies) private var speakTypedReplies = true
     @AppStorage(SettingsKeys.vesperVoice) private var vesperVoice = SettingsKeys.defaultVesperVoice
+    @AppStorage(SettingsKeys.mikaVoice) private var mikaVoice = SettingsKeys.defaultMikaVoice
     @AppStorage(SettingsKeys.ttsEngine) private var ttsEngine = SettingsKeys.defaultTTSEngine
     @AppStorage(SettingsKeys.voiceIntensity) private var voiceIntensity = 0.5
     @AppStorage(SettingsKeys.voiceHeat) private var voiceHeat = 0.5
@@ -104,7 +105,12 @@ struct SettingsView: View {
                             Text(engine).tag(engine)
                         }
                     }
-                    Picker("Voice", selection: $vesperVoice) {
+                    Picker("Vesper voice", selection: $vesperVoice) {
+                        ForEach(SettingsKeys.companionVoices, id: \.self) { voice in
+                            Text(voice).tag(voice)
+                        }
+                    }
+                    Picker("Mika voice", selection: $mikaVoice) {
                         ForEach(SettingsKeys.companionVoices, id: \.self) { voice in
                             Text(voice).tag(voice)
                         }
@@ -115,7 +121,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Her voice")
                 } footer: {
-                    Text("Energy shapes her speaking pace. Mouths beyond ara need a Mac server that carries them; this repo's phone API always speaks through xAI. Mika speaks with eve; Chat is text only.")
+                    Text("Energy shapes speaking pace. Mouths beyond ara need a Mac server that carries them; this repo's phone API always speaks through xAI. Chat is text only.")
                 }
 
                 Section("Presence") {
