@@ -11,6 +11,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.sadismBias) private var sadismBias = 0.55
     @AppStorage(SettingsKeys.intensityBias) private var intensityBias = 0.55
     @AppStorage(SettingsKeys.awayModel) private var awayModel = SettingsKeys.defaultAwayModel
+    @AppStorage(SettingsKeys.replyStyle) private var replyStyle = "chat"
+    @AppStorage(SettingsKeys.speakTypedReplies) private var speakTypedReplies = true
+    @AppStorage(SettingsKeys.vesperVoice) private var vesperVoice = SettingsKeys.defaultVesperVoice
 
     @State private var xaiKey: String = Keychain.get(Keychain.xaiKeyAccount) ?? ""
     @State private var knockResult: String?
@@ -61,6 +64,29 @@ struct SettingsView: View {
                     Text("Away — Grok direct")
                 } footer: {
                     Text("Used only when her Mac is unreachable. The key lives in the iOS Keychain and never leaves this phone.")
+                }
+
+                Section {
+                    Picker("Reply style", selection: $replyStyle) {
+                        Text("Chat").tag("chat")
+                        Text("Narrative").tag("narrative")
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Replies")
+                } footer: {
+                    Text("Chat keeps it tight and spoken-feel; Narrative lets scene and atmosphere breathe.")
+                }
+
+                Section {
+                    Toggle("Speak typed replies", isOn: $speakTypedReplies)
+                    TextField("Vesper voice (xAI)", text: $vesperVoice)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    Text("Voice")
+                } footer: {
+                    Text("Spoken turns always answer aloud. Mika speaks with eve; Chat is text only.")
                 }
 
                 Section("Presence") {

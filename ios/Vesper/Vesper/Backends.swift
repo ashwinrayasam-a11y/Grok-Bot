@@ -47,6 +47,8 @@ struct MacChatRequest: Encodable {
     var personaOverride: String?
     var plain: Bool = false
     var voice: String?
+    /// "chat" (tight, conversational) or "narrative" (scene prose).
+    var replyStyle: String?
 }
 
 struct MacChatResponse: Decodable {

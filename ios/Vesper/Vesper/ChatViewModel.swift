@@ -43,6 +43,9 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.sadismBias: 0.55,
             SettingsKeys.intensityBias: 0.55,
             SettingsKeys.awayModel: SettingsKeys.defaultAwayModel,
+            SettingsKeys.replyStyle: "chat",
+            SettingsKeys.speakTypedReplies: true,
+            SettingsKeys.vesperVoice: SettingsKeys.defaultVesperVoice,
         ])
         if let raw = defaults.string(forKey: "castMember"),
            let saved = CastMember(rawValue: raw) {
@@ -153,6 +156,37 @@ final class ChatViewModel: ObservableObject {
     private var awayModel: String {
         defaults.string(forKey: SettingsKeys.awayModel) ?? SettingsKeys.defaultAwayModel
     }
+    private var replyStyle: String {
+        defaults.string(forKey: SettingsKeys.replyStyle) ?? "chat"
+    }
+    private var speakTypedReplies: Bool {
+        defaults.bool(forKey: SettingsKeys.speakTypedReplies)
+    }
+    /// Per-cast TTS voice; Vesper's is user-tunable in Settings.
+    private var effectiveVoiceID: String? {
+        switch cast {
+        case .vesper:
+            let custom = defaults.string(forKey: SettingsKeys.vesperVoice)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (custom?.isEmpty == false) ? custom : SettingsKeys.defaultVesperVoice
+        case .mika:
+            return "eve"
+        case .chat:
+            return nil
+        }
+    }
+    /// Reply-style rider appended to Away prompts (the Mac appends its own).
+    private var styleRider: String {
+        switch replyStyle {
+        case "narrative":
+            return "\n\nReply style: narrative — write with scene and atmosphere, "
+                + "weaving action and sensation through the dialogue; longer prose "
+                + "paragraphs are welcome."
+        default:
+            return "\n\nReply style: chat — conversational and spoken-feel. Keep it "
+                + "tight, dialogue first, minimal narration."
+        }
+    }
     private var xaiKey: String? {
         guard let key = Keychain.get(Keychain.xaiKeyAccount),
               !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -189,7 +223,7 @@ final class ChatViewModel: ObservableObject {
                 if text.isEmpty {
                     banner = "Didn't catch anything — try again."
                 } else {
-                    send(text)
+                    send(text, spoken: true)
                 }
             } catch {
                 isHearing = false
@@ -218,16 +252,20 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Sending
 
-    func send(_ raw: String) {
+    func send(_ raw: String, spoken: Bool = false) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isThinking else { return }
+        // Spoken turns always answer aloud; typed turns follow the setting.
+        let wantVoice = effectiveVoiceID != nil && (spoken || speakTypedReplies)
         let history = recentTurns()
         messages.append(ChatMessage(role: .user, text: text))
         isThinking = true
         Task {
-            await deliver(text, history: history)
+            await deliver(text, history: history, wantVoice: wantVoice)
             isThinking = false
-            ensureReplyHasVoice()
+            if wantVoice {
+                ensureReplyHasVoice()
+            }
             persist()
         }
     }
@@ -235,7 +273,7 @@ final class ChatViewModel: ObservableObject {
     /// Reliability net for typed chat: if the reply landed text-only because
     /// TTS failed somewhere along the way, fetch one fresh take automatically.
     private func ensureReplyHasVoice() {
-        guard cast.voiceID != nil,
+        guard effectiveVoiceID != nil,
               let last = messages.last,
               last.role == .assistant, !last.isError, !last.hasVoice,
               !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -254,16 +292,16 @@ final class ChatViewModel: ObservableObject {
 
     /// Prefer home on the Mac; fall back to the Away key seamlessly — a
     /// sleeping Mac should never block the conversation.
-    private func deliver(_ text: String, history: [Turn]) async {
+    private func deliver(_ text: String, history: [Turn], wantVoice: Bool) async {
         if let link = MacLink(urlString: macURLString), await link.isAwake() {
             mode = .home
             notedAwayFallback = false
             do {
-                try await sendViaMac(link, text: text, history: history)
+                try await sendViaMac(link, text: text, history: history, wantVoice: wantVoice)
                 return
             } catch VesperError.http(let code, _) where code == 404 {
                 do {
-                    try await sendViaMacLegacy(link, text: text, history: history)
+                    try await sendViaMacLegacy(link, text: text, history: history, wantVoice: wantVoice)
                     return
                 } catch {
                     banner = "Home leg failed — \(error.localizedDescription)"
@@ -280,7 +318,7 @@ final class ChatViewModel: ObservableObject {
                 banner = "Mac offline · using Away"
             }
             do {
-                try await sendViaXAI(key: key, text: text, history: history)
+                try await sendViaXAI(key: key, text: text, history: history, wantVoice: wantVoice)
                 return
             } catch {
                 banner = error.localizedDescription
@@ -294,8 +332,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// Streaming home leg: tokens append live; voice starts on the first clip.
-    private func sendViaMac(_ link: MacLink, text: String, history: [Turn]) async throws {
-        let payload = macPayload(text: text, history: history)
+    private func sendViaMac(
+        _ link: MacLink, text: String, history: [Turn], wantVoice: Bool
+    ) async throws {
+        let payload = macPayload(text: text, history: history, wantVoice: wantVoice)
         var replyID: UUID?
         var streamError: String?
 
@@ -357,8 +397,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// Pre-streaming phone API (older Macs): one-shot reply + clip.
-    private func sendViaMacLegacy(_ link: MacLink, text: String, history: [Turn]) async throws {
-        let response = try await link.chat(macPayload(text: text, history: history))
+    private func sendViaMacLegacy(
+        _ link: MacLink, text: String, history: [Turn], wantVoice: Bool
+    ) async throws {
+        let response = try await link.chat(
+            macPayload(text: text, history: history, wantVoice: wantVoice)
+        )
         if cast == .vesper {
             emotion = response.state
         }
@@ -369,8 +413,10 @@ final class ChatViewModel: ObservableObject {
         appendReply(response.reply, audio: audio)
     }
 
-    private func sendViaXAI(key: String, text: String, history: [Turn]) async throws {
-        let system: String
+    private func sendViaXAI(
+        key: String, text: String, history: [Turn], wantVoice: Bool
+    ) async throws {
+        var system: String
         if let override = cast.personaOverride {
             system = override
         } else {
@@ -381,16 +427,19 @@ final class ChatViewModel: ObservableObject {
                 state: emotion, userName: userName, notes: notes, intensityBias: intensityBias
             )
         }
+        system += styleRider
         let xai = XAILink(apiKey: key, model: awayModel)
         let reply = try await xai.chat(system: system, history: history, user: text)
         var audio: Data?
-        if let voiceID = cast.voiceID {
+        if wantVoice, let voiceID = effectiveVoiceID {
             audio = try? await xai.speak(reply, voice: voiceID)
         }
         appendReply(reply, audio: audio)
     }
 
-    private func macPayload(text: String, history: [Turn]) -> MacChatRequest {
+    private func macPayload(
+        text: String, history: [Turn], wantVoice: Bool
+    ) -> MacChatRequest {
         MacChatRequest(
             message: text,
             history: history,
@@ -400,10 +449,11 @@ final class ChatViewModel: ObservableObject {
             warmthBias: warmthBias,
             sadismBias: sadismBias,
             intensity: intensityBias,
-            wantAudio: cast.voiceID != nil,
+            wantAudio: wantVoice,
             personaOverride: cast.personaOverride,
             plain: cast.plain,
-            voice: cast.voiceID
+            voice: effectiveVoiceID,
+            replyStyle: replyStyle
         )
     }
 
@@ -453,7 +503,7 @@ final class ChatViewModel: ObservableObject {
     /// old audio survives if synthesis fails.
     func regenerateVoice(for message: ChatMessage) {
         guard message.role == .assistant, !message.isError,
-              let voiceID = cast.voiceID, regeneratingID == nil
+              let voiceID = effectiveVoiceID, regeneratingID == nil
         else { return }
         regeneratingID = message.id
         let text = message.text

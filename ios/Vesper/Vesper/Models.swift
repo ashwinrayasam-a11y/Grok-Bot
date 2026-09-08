@@ -81,9 +81,13 @@ enum SettingsKeys {
     static let sadismBias = "sadismBias"
     static let intensityBias = "intensityBias"
     static let awayModel = "awayModel"
+    static let replyStyle = "replyStyle"              // "chat" | "narrative"
+    static let speakTypedReplies = "speakTypedReplies"
+    static let vesperVoice = "vesperVoice"
 
     static let defaultMacURL = "http://Ashs-MacBook-Pro.local:7861"
     static let defaultAwayModel = "grok-4"
+    static let defaultVesperVoice = "ara"
 }
 
 // MARK: - Persistence

@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showSettings = false
     @State private var showMood = false
+    @State private var showThreads = false
     @State private var talkOn = false
     @AppStorage("stageTall") private var stageTall = false
     @AppStorage("chatVisible") private var chatVisible = true
@@ -31,6 +32,10 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showMood) {
             MoodSheet()
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $showThreads) {
+            ThreadsSheet()
                 .environmentObject(model)
         }
         .task {
@@ -160,22 +165,10 @@ struct ChatView: View {
                 } label: {
                     Label("New chat", systemImage: "square.and.pencil")
                 }
-                if !model.threads.isEmpty {
-                    Menu {
-                        ForEach(model.threads.prefix(12)) { thread in
-                            Button {
-                                model.openThread(thread.id)
-                            } label: {
-                                if thread.id == model.currentThreadID {
-                                    Label(thread.title, systemImage: "checkmark")
-                                } else {
-                                    Text(thread.title)
-                                }
-                            }
-                        }
-                    } label: {
-                        Label("Threads", systemImage: "text.justify.left")
-                    }
+                Button {
+                    showThreads = true
+                } label: {
+                    Label("Threads…", systemImage: "text.justify.left")
                 }
                 Divider()
                 if model.cast == .vesper {

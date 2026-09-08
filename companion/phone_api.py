@@ -155,6 +155,8 @@ class ChatRequest(BaseModel):
     plain: bool = False
     # Optional per-request TTS voice (defaults to the configured voice).
     voice: str | None = None
+    # Reply style: "chat" (conversational, tight) or "narrative" (scene prose).
+    reply_style: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -196,6 +198,23 @@ def persona() -> dict[str, str]:
     return {"name": COMPANION_NAME, "base_persona": BASE_PERSONA}
 
 
+_STYLE_RIDERS = {
+    "chat": (
+        "\n\nReply style: chat — conversational and spoken-feel. Keep it tight, "
+        "dialogue first, minimal narration."
+    ),
+    "narrative": (
+        "\n\nReply style: narrative — write with scene and atmosphere, weaving "
+        "action and sensation through the dialogue; longer prose paragraphs are "
+        "welcome."
+    ),
+}
+
+
+def _style_rider(reply_style: str | None) -> str:
+    return _STYLE_RIDERS.get((reply_style or "").lower(), "")
+
+
 def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
     """Shared turn pipeline. Vesper's path is unchanged (same as app.py's
     respond()). Cast members with a persona_override use their own prompt;
@@ -213,6 +232,7 @@ def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
             system += f"\n\nThey go by: {req.user_name.strip()}. Prefer this name."
         if not req.plain and req.notes.strip():
             system += f"\n\n## Private notes from them\n{req.notes.strip()}"
+        system += _style_rider(req.reply_style)
         return state, history_to_messages(history, system, message)
 
     state = EmotionalState.from_dict(req.state)
@@ -228,6 +248,7 @@ def _prepare(req: ChatRequest) -> tuple[EmotionalState, list[dict[str, str]]]:
         system += "\n\nBias this reply toward higher emotional intensity and sharper presence."
     elif req.intensity < 0.35:
         system += "\n\nBias this reply toward quieter, lower-intensity presence."
+    system += _style_rider(req.reply_style)
 
     return state, history_to_messages(history, system, message)
 

@@ -246,6 +246,34 @@ def test_tts_endpoint_voice_passthrough(monkeypatch):
     assert base64.b64decode(r.json()["audio_b64"]) == b"take2"
 
 
+def test_reply_style_riders(monkeypatch):
+    captured = {}
+
+    def spy_stream(**kw):
+        captured.update(kw)
+        yield "mm."
+
+    monkeypatch.setattr(phone_api, "stream_chat", spy_stream)
+    monkeypatch.setattr(phone_api, "_synthesize", lambda text, voice=None: None)
+
+    client.post("/v1/chat", json={"message": "hey", "reply_style": "narrative"})
+    assert "Reply style: narrative" in captured["messages"][0]["content"]
+
+    client.post("/v1/chat", json={"message": "hey", "reply_style": "chat"})
+    assert "Reply style: chat" in captured["messages"][0]["content"]
+
+    # Absent style leaves the prompt untouched; overrides get the rider too.
+    client.post("/v1/chat", json={"message": "hey"})
+    assert "Reply style" not in captured["messages"][0]["content"]
+
+    client.post(
+        "/v1/chat",
+        json={"message": "hey", "persona_override": "You are Mika.", "reply_style": "narrative"},
+    )
+    assert captured["messages"][0]["content"].startswith("You are Mika.")
+    assert "Reply style: narrative" in captured["messages"][0]["content"]
+
+
 def test_voice_override_reaches_tts(monkeypatch):
     seen = {}
 
