@@ -14,7 +14,6 @@ struct ChatView: View {
     /// When her last clip finished — the mic holds off until echo dies.
     @State private var lastSpokeAt: Date?
     @State private var talkWatchdog: Task<Void, Never>?
-    @AppStorage("stageTall") private var stageTall = false
     @AppStorage("chatVisible") private var chatVisible = true
 
     /// Chat cast has no stage, so its chat panel can never be hidden.
@@ -82,33 +81,98 @@ struct ChatView: View {
             CastBackdrop(cast: model.cast)
                 .ignoresSafeArea()
 
-            // Header lives in the layout (not a safe-area inset) so its menus
-            // always hit-test, no matter what the stage underneath is doing.
+            // She is the room: full-bleed, bottom-anchored, and she ignores
+            // the keyboard completely — typing never compresses her away.
+            if model.cast.hasPresence {
+                CutoutStage(cast: model.cast)
+                    .ignoresSafeArea(.all)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                            chatVisible.toggle()
+                        }
+                    }
+                    .gesture(
+                        // Swipe between spaces, like flipping pages.
+                        DragGesture(minimumDistance: 40).onEnded { value in
+                            let all = CastMember.allCases
+                            guard let index = all.firstIndex(of: model.cast) else { return }
+                            if value.translation.width < -60, index < all.count - 1 {
+                                withAnimation(.easeInOut(duration: 0.35)) {
+                                    model.switchCast(to: all[index + 1])
+                                }
+                            } else if value.translation.width > 60, index > 0 {
+                                withAnimation(.easeInOut(duration: 0.35)) {
+                                    model.switchCast(to: all[index - 1])
+                                }
+                            }
+                        }
+                    )
+            }
+
+            // The chat is a film over her, not a wall in front of her.
             VStack(spacing: 0) {
                 header
-                if model.cast.hasPresence {
-                    stage
-                }
-                if showChat {
-                    conversation
-                } else {
-                    Spacer(minLength: 0)
-                }
-                statusLine
-                if showChat {
-                    ComposerPill(
-                        draft: $draft,
-                        recorder: recorder,
-                        busy: model.isHearing,
-                        accent: model.cast.accent,
-                        placeholder: model.cast.placeholder,
-                        onSend: sendDraft,
-                        onTalkStart: startListening,
-                        onTalkEnd: sendSpoken
-                    )
-                }
+                Spacer(minLength: 0)
+                chatColumn
             }
             .animation(.spring(response: 0.45, dampingFraction: 0.9), value: showChat)
+        }
+    }
+
+    /// Height-capped, gradient-blended chat floating on the photo. On the
+    /// presence pages her body stays visible above and around it — with the
+    /// keyboard up, only this film rises; she doesn't move.
+    @ViewBuilder
+    private var chatColumn: some View {
+        if showChat {
+            VStack(spacing: 0) {
+                conversation
+                    .frame(maxHeight: model.cast.hasPresence ? 330 : .infinity)
+                    .mask(alignment: .bottom) {
+                        if model.cast.hasPresence {
+                            VStack(spacing: 0) {
+                                LinearGradient(
+                                    colors: [.clear, .black],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 32)
+                                Rectangle().fill(.black)
+                            }
+                        } else {
+                            Rectangle().fill(.black)
+                        }
+                    }
+                statusLine
+                ComposerPill(
+                    draft: $draft,
+                    recorder: recorder,
+                    busy: model.isHearing,
+                    accent: model.cast.accent,
+                    placeholder: model.cast.placeholder,
+                    onSend: sendDraft,
+                    onTalkStart: startListening,
+                    onTalkEnd: sendSpoken
+                )
+            }
+            .background {
+                if model.cast.hasPresence {
+                    LinearGradient(
+                        colors: [
+                            CastBackdrop.canvas(for: model.cast).opacity(0),
+                            CastBackdrop.canvas(for: model.cast).opacity(0.55),
+                            CastBackdrop.canvas(for: model.cast).opacity(0.88),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .allowsHitTesting(false)
+                    .ignoresSafeArea(edges: .bottom)
+                }
+            }
+        } else {
+            statusLine
         }
     }
 
@@ -193,46 +257,6 @@ struct ChatView: View {
                 endPoint: .bottom
             )
             .allowsHitTesting(false)
-        )
-    }
-
-    /// Her stage: the familiar 2D cutout over the page's own light, fading
-    /// into the canvas. Breath only — no wiggle, no 3D. Tap to resize.
-    private var stage: some View {
-        CutoutStage(cast: model.cast)
-        .frame(height: showChat ? (stageTall ? 560 : 420) : nil)
-        .frame(maxHeight: showChat ? nil : .infinity)
-        .clipped()
-        .overlay(alignment: .bottom) {
-            LinearGradient(
-                colors: [.clear, CastBackdrop.canvas(for: model.cast)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 70)
-            .allowsHitTesting(false)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
-                stageTall.toggle()
-            }
-        }
-        // Swipe between spaces, like flipping pages.
-        .gesture(
-            DragGesture(minimumDistance: 40).onEnded { value in
-                let all = CastMember.allCases
-                guard let index = all.firstIndex(of: model.cast) else { return }
-                if value.translation.width < -60, index < all.count - 1 {
-                    withAnimation(.easeInOut(duration: 0.35)) {
-                        model.switchCast(to: all[index + 1])
-                    }
-                } else if value.translation.width > 60, index > 0 {
-                    withAnimation(.easeInOut(duration: 0.35)) {
-                        model.switchCast(to: all[index - 1])
-                    }
-                }
-            }
         )
     }
 

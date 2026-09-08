@@ -40,9 +40,9 @@ struct ComposerPill: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(
-            // Dark solid, not frosted — the Grok/ChatGPT panel, cheaper to
-            // composite than material blur too.
-            Capsule().fill(Color(hex: 0x1A1715))
+            // Translucent dark — blends into the full-body photo behind it
+            // instead of walling her off.
+            Capsule().fill(Color(hex: 0x1A1715).opacity(0.84))
         )
         .overlay(
             Capsule().strokeBorder(
