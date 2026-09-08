@@ -84,6 +84,7 @@ enum SettingsKeys {
     static let replyStyle = "replyStyle"              // "chat" | "narrative"
     static let speakTypedReplies = "speakTypedReplies"
     static let vesperVoice = "vesperVoice"
+    static let routeMode = "routeMode"                // auto | home | away
     static let ttsEngine = "ttsEngine"                // the Mouth
     static let voiceIntensity = "voiceIntensity"      // Energy dial
     static let voiceHeat = "voiceHeat"                // Horny dial

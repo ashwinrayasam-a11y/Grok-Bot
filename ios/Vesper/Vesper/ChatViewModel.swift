@@ -49,6 +49,7 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.ttsEngine: SettingsKeys.defaultTTSEngine,
             SettingsKeys.voiceIntensity: 0.5,
             SettingsKeys.voiceHeat: 0.5,
+            SettingsKeys.routeMode: "auto",
         ])
         if let raw = defaults.string(forKey: "castMember"),
            let saved = CastMember(rawValue: raw) {
@@ -201,17 +202,32 @@ final class ChatViewModel: ObservableObject {
         else { return nil }
         return key
     }
+    /// Manual route pin: "auto" (ladder), "home" (Mac only), "away" (xAI only).
+    private var routeMode: String {
+        defaults.string(forKey: SettingsKeys.routeMode) ?? "auto"
+    }
 
     // MARK: - Link state
 
     func refreshLink() async {
         mode = .checking
-        if let link = MacLink(urlString: macURLString), await link.isAwake() {
-            mode = .home
-        } else if xaiKey != nil {
-            mode = .away
-        } else {
-            mode = .offline
+        switch routeMode {
+        case "home":
+            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+                mode = .home
+            } else {
+                mode = .offline
+            }
+        case "away":
+            mode = xaiKey != nil ? .away : .offline
+        default:
+            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+                mode = .home
+            } else if xaiKey != nil {
+                mode = .away
+            } else {
+                mode = .offline
+            }
         }
     }
 
@@ -243,7 +259,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func transcribe(_ fileURL: URL) async throws -> String {
-        if let link = MacLink(urlString: macURLString), await link.isAwake() {
+        // On-device Whisper stays as the floor in every route — it's local,
+        // not an Away backend, and voice input should never go deaf.
+        if routeMode != "away", let link = MacLink(urlString: macURLString), await link.isAwake() {
             mode = .home
             do {
                 return try await link.transcribe(fileURL: fileURL)
@@ -298,30 +316,43 @@ final class ChatViewModel: ObservableObject {
     /// Once-per-transition note when we slide from Home to Away.
     private var notedAwayFallback = false
 
-    /// Prefer home on the Mac; fall back to the Away key seamlessly — a
-    /// sleeping Mac should never block the conversation.
+    /// Routing: "auto" prefers the Mac and falls back to the Away key;
+    /// "home" pins the Mac; "away" goes straight to xAI.
     private func deliver(_ text: String, history: [Turn], wantVoice: Bool) async {
-        if let link = MacLink(urlString: macURLString), await link.isAwake() {
-            mode = .home
-            notedAwayFallback = false
-            do {
-                try await sendViaMac(link, text: text, history: history, wantVoice: wantVoice)
-                return
-            } catch VesperError.http(let code, _) where code == 404 {
+        let route = routeMode
+
+        if route != "away" {
+            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+                mode = .home
+                notedAwayFallback = false
                 do {
-                    try await sendViaMacLegacy(link, text: text, history: history, wantVoice: wantVoice)
+                    try await sendViaMac(link, text: text, history: history, wantVoice: wantVoice)
                     return
+                } catch VesperError.http(let code, _) where code == 404 {
+                    do {
+                        try await sendViaMacLegacy(link, text: text, history: history, wantVoice: wantVoice)
+                        return
+                    } catch {
+                        banner = "Home leg failed — \(error.localizedDescription)"
+                    }
                 } catch {
                     banner = "Home leg failed — \(error.localizedDescription)"
                 }
-            } catch {
-                banner = "Home leg failed — \(error.localizedDescription)"
+                if route == "home" {
+                    appendQuiet(nil)
+                    return
+                }
+            } else if route == "home" {
+                mode = .offline
+                banner = "Mac unreachable — Home is pinned (Settings → Route)."
+                appendQuiet(nil)
+                return
             }
         }
 
         if let key = xaiKey {
             mode = .away
-            if !notedAwayFallback {
+            if route == "auto", !notedAwayFallback {
                 notedAwayFallback = true
                 banner = "Mac offline · using Away"
             }
@@ -334,7 +365,9 @@ final class ChatViewModel: ObservableObject {
             }
         } else {
             mode = .offline
-            banner = "Mac offline and no Away key in Settings — add an xAI key to keep chatting."
+            banner = route == "away"
+                ? "Away is pinned but no xAI key is saved (Settings → Away)."
+                : "Mac offline and no Away key in Settings — add an xAI key to keep chatting."
             appendQuiet(nil)
         }
     }
@@ -535,7 +568,8 @@ final class ChatViewModel: ObservableObject {
         let text = message.text
         Task {
             var clip: Data?
-            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+            if routeMode != "away",
+               let link = MacLink(urlString: macURLString), await link.isAwake() {
                 clip = try? await link.tts(
                     text: text,
                     voice: voiceID,
@@ -544,7 +578,7 @@ final class ChatViewModel: ObservableObject {
                     heat: voiceHeat
                 )
             }
-            if clip == nil, let key = xaiKey {
+            if clip == nil, routeMode != "home", let key = xaiKey {
                 clip = try? await XAILink(apiKey: key, model: awayModel).speak(text, voice: voiceID)
             }
             if let clip {

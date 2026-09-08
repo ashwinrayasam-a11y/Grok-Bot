@@ -17,6 +17,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.ttsEngine) private var ttsEngine = SettingsKeys.defaultTTSEngine
     @AppStorage(SettingsKeys.voiceIntensity) private var voiceIntensity = 0.5
     @AppStorage(SettingsKeys.voiceHeat) private var voiceHeat = 0.5
+    @AppStorage(SettingsKeys.routeMode) private var routeMode = "auto"
 
     @State private var xaiKey: String = Keychain.get(Keychain.xaiKeyAccount) ?? ""
     @State private var knockResult: String?
@@ -48,6 +49,22 @@ struct SettingsView: View {
                     Text("Her home — your Mac")
                 } footer: {
                     Text("Run `python -m companion.phone_api` on the Mac. Find its name with `scutil --get LocalHostName`.")
+                }
+
+                Section {
+                    Picker("Route", selection: $routeMode) {
+                        Text("Auto").tag("auto")
+                        Text("Home").tag("home")
+                        Text("Away").tag("away")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: routeMode) {
+                        Task { await model.refreshLink() }
+                    }
+                } header: {
+                    Text("Route")
+                } footer: {
+                    Text("Auto prefers the Mac and falls back. Home pins the Mac. Away goes straight to the xAI key.")
                 }
 
                 Section {
