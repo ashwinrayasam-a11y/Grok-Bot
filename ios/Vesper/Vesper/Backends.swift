@@ -319,7 +319,8 @@ struct XAILink {
         system: String,
         history: [Turn],
         user: String,
-        temperature: Double = 0.92
+        temperature: Double = 0.92,
+        maxTokens: Int = 900
     ) async throws -> String {
         var turns: [Turn] = [Turn(role: "system", content: system)]
         turns += history
@@ -331,7 +332,7 @@ struct XAILink {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try snakeEncoder().encode(
-            CompletionRequest(model: model, messages: turns, temperature: temperature, maxTokens: 900)
+            CompletionRequest(model: model, messages: turns, temperature: temperature, maxTokens: maxTokens)
         )
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

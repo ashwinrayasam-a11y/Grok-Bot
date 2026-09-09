@@ -203,16 +203,32 @@ final class ChatViewModel: ObservableObject {
         )
     }
     /// Reply-style rider appended to Away prompts (the Mac appends its own).
+    /// Narrative teaches finish-inside-the-cap: the reply is one complete
+    /// beat that lands cleanly, never prose that trails off mid-scene when
+    /// the token budget runs out.
     private var styleRider: String {
         switch replyStyle {
         case "narrative":
             return "\n\nReply style: narrative — write with scene and atmosphere, "
-                + "weaving action and sensation through the dialogue; longer prose "
-                + "paragraphs are welcome."
+                + "weaving action and sensation through the dialogue. Shape the "
+                + "reply as ONE complete beat: roughly two to five short paragraphs "
+                + "that open, build, and land. Hard rule: finish the beat inside "
+                + "this reply — the last line must be a completed sentence closing "
+                + "a completed paragraph. Never trail off mid-scene, mid-action, or "
+                + "mid-sentence because you ran long. If the arc wants more room "
+                + "than one reply holds, close this beat cleanly and let the next "
+                + "turn pick it up — a clean close always beats an unfinished "
+                + "longer arc."
         default:
             return "\n\nReply style: chat — conversational and spoken-feel. Keep it "
                 + "tight, dialogue first, minimal narration."
         }
+    }
+    /// Away-leg token budget: story prose gets headroom to land a full beat;
+    /// chat stays tight. The cap remains — the rider teaches finishing inside
+    /// it, so a beat that fits never gets cut mid-scene by the limit.
+    private var awayMaxTokens: Int {
+        replyStyle == "narrative" ? 1100 : 750
     }
     private var xaiKey: String? {
         guard let key = Keychain.get(Keychain.xaiKeyAccount),
@@ -587,7 +603,9 @@ final class ChatViewModel: ObservableObject {
         }
         system += styleRider
         let xai = XAILink(apiKey: key, model: awayModel)
-        let reply = try await xai.chat(system: system, history: history, user: text)
+        let reply = try await xai.chat(
+            system: system, history: history, user: text, maxTokens: awayMaxTokens
+        )
         // Text lands immediately; the voice arrives sentence-by-sentence
         // instead of one mega-clip after everything is synthesized.
         appendReply(reply, audio: nil)
