@@ -1,0 +1,842 @@
+import Combine
+import Foundation
+import SwiftUI
+import UIKit
+
+@MainActor
+final class ChatViewModel: ObservableObject {
+    @Published var messages: [ChatMessage] = []
+    @Published var emotion = EmotionState()
+    @Published var mode: LinkMode = .checking
+    @Published var isThinking = false
+    @Published var isHearing = false
+    @Published var hearingStatus: String?
+    @Published private(set) var cast: CastMember = .vesper
+    @Published private(set) var threads: [ThreadMeta] = []
+    @Published private(set) var currentThreadID = UUID()
+    /// Bumped (throttled) while tokens stream so the view can follow the text
+    /// without issuing a scroll command per token.
+    @Published private(set) var scrollPulse = 0
+    @Published var banner: String? {
+        didSet {
+            bannerTask?.cancel()
+            guard banner != nil else { return }
+            bannerTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                self?.banner = nil
+            }
+        }
+    }
+
+    let voice = VoicePlayer()
+
+    private var bannerTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
+    private var lastScrollPulse = Date.distantPast
+    private let defaults = UserDefaults.standard
+
+    init() {
+        defaults.register(defaults: [
+            SettingsKeys.macURL: SettingsKeys.defaultMacURL,
+            SettingsKeys.warmthBias: 0.55,
+            SettingsKeys.sadismBias: 0.55,
+            SettingsKeys.intensityBias: 0.55,
+            SettingsKeys.awayModel: SettingsKeys.defaultAwayModel,
+            SettingsKeys.replyStyle: "chat",
+            SettingsKeys.speakTypedReplies: true,
+            SettingsKeys.vesperVoice: SettingsKeys.defaultVesperVoice,
+            SettingsKeys.mikaVoice: SettingsKeys.defaultMikaVoice,
+            SettingsKeys.ttsEngine: SettingsKeys.defaultTTSEngine,
+            SettingsKeys.voiceIntensity: 0.5,
+            SettingsKeys.voiceHeat: 0.5,
+            SettingsKeys.routeMode: "auto",
+            "mikaLiveEnabled": true,
+            "mikaReplyBase": "https://ashs-macbook-pro.tail75e054.ts.net",
+        ])
+        if let raw = defaults.string(forKey: "castMember"),
+           let saved = CastMember(rawValue: raw) {
+            cast = saved
+        }
+        currentThreadID = resolveThread(for: cast)
+        if let snapshot = SoulStore.load(for: cast, thread: currentThreadID) {
+            emotion = snapshot.emotion
+            messages = snapshot.messages
+        }
+        threads = SoulStore.threads(for: cast)
+        // Republish the nested player's changes so voice chips update.
+        voice.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        // Republish dial changes so her look shifts live while sliders drag
+        // (the avatar's springs turn the stream of values into a crossfade).
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Cast
+
+    func switchCast(to member: CastMember) {
+        guard member != cast else { return }
+        voice.stop()
+        persist()
+        MarkdownStore.clear()
+        cast = member
+        defaults.set(member.rawValue, forKey: "castMember")
+        currentThreadID = resolveThread(for: member)
+        let snapshot = SoulStore.load(for: member, thread: currentThreadID)
+        emotion = snapshot?.emotion ?? EmotionState()
+        messages = snapshot?.messages ?? []
+        threads = SoulStore.threads(for: member)
+        isThinking = false
+        isHearing = false
+        hearingStatus = nil
+        banner = nil
+    }
+
+    // MARK: - Threads
+
+    /// A clean page: fresh thread, fresh mood, same cast.
+    func newThread() {
+        persist()
+        voice.stop()
+        MarkdownStore.clear()
+        currentThreadID = UUID()
+        defaults.set(currentThreadID.uuidString, forKey: threadKey(for: cast))
+        messages = []
+        emotion = EmotionState()
+        isThinking = false
+        isHearing = false
+        hearingStatus = nil
+        persist()
+    }
+
+    func openThread(_ id: UUID) {
+        guard id != currentThreadID else { return }
+        persist()
+        voice.stop()
+        MarkdownStore.clear()
+        currentThreadID = id
+        defaults.set(id.uuidString, forKey: threadKey(for: cast))
+        let snapshot = SoulStore.load(for: cast, thread: id)
+        emotion = snapshot?.emotion ?? EmotionState()
+        messages = snapshot?.messages ?? []
+        isThinking = false
+    }
+
+    private func threadKey(for member: CastMember) -> String {
+        "currentThread-\(member.rawValue)"
+    }
+
+    private func resolveThread(for member: CastMember) -> UUID {
+        if let raw = defaults.string(forKey: threadKey(for: member)),
+           let id = UUID(uuidString: raw) {
+            return id
+        }
+        if let migrated = SoulStore.migrateLegacy(for: member) {
+            defaults.set(migrated.uuidString, forKey: threadKey(for: member))
+            return migrated
+        }
+        let fresh = UUID()
+        defaults.set(fresh.uuidString, forKey: threadKey(for: member))
+        return fresh
+    }
+
+    private var threadTitle: String {
+        messages.first(where: { $0.role == .user })
+            .map { String($0.text.prefix(42)) } ?? "New chat"
+    }
+
+    // MARK: - Settings
+
+    var macURLString: String {
+        defaults.string(forKey: SettingsKeys.macURL) ?? SettingsKeys.defaultMacURL
+    }
+    private var userName: String { defaults.string(forKey: SettingsKeys.userName) ?? "" }
+    private var notes: String { defaults.string(forKey: SettingsKeys.notes) ?? "" }
+    private var warmthBias: Double { defaults.double(forKey: SettingsKeys.warmthBias) }
+    private var sadismBias: Double { defaults.double(forKey: SettingsKeys.sadismBias) }
+    private var intensityBias: Double { defaults.double(forKey: SettingsKeys.intensityBias) }
+    private var awayModel: String {
+        defaults.string(forKey: SettingsKeys.awayModel) ?? SettingsKeys.defaultAwayModel
+    }
+    private var replyStyle: String {
+        defaults.string(forKey: SettingsKeys.replyStyle) ?? "chat"
+    }
+    private var speakTypedReplies: Bool {
+        defaults.bool(forKey: SettingsKeys.speakTypedReplies)
+    }
+    private var ttsEngine: String {
+        defaults.string(forKey: SettingsKeys.ttsEngine) ?? SettingsKeys.defaultTTSEngine
+    }
+    private var voiceIntensity: Double { defaults.double(forKey: SettingsKeys.voiceIntensity) }
+    private var voiceHeat: Double { defaults.double(forKey: SettingsKeys.voiceHeat) }
+    /// Per-cast TTS voice; Vesper's and Mika's are user-tunable in Settings.
+    private var effectiveVoiceID: String? {
+        func stored(_ key: String, fallback: String) -> String {
+            let custom = defaults.string(forKey: key)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (custom?.isEmpty == false) ? custom! : fallback
+        }
+        switch cast {
+        case .vesper:
+            return stored(SettingsKeys.vesperVoice, fallback: SettingsKeys.defaultVesperVoice)
+        case .mika:
+            return stored(SettingsKeys.mikaVoice, fallback: SettingsKeys.defaultMikaVoice)
+        case .chat:
+            return nil
+        }
+    }
+
+    /// Generic mood rider for override casts (Mika) on the Away leg — same
+    /// line the Mac appends, so her sliders matter on both paths.
+    private func vibeLine(_ e: EmotionState) -> String {
+        String(
+            format: "\n\nCurrent vibe (0-1): warmth %.2f, playfulness %.2f, "
+                + "intensity %.2f, melancholy %.2f. Let it color your tone, not your content.",
+            e.warmth, e.playfulness, e.intensity, e.melancholy
+        )
+    }
+    /// Reply-style rider appended to Away prompts (the Mac appends its own).
+    private var styleRider: String {
+        switch replyStyle {
+        case "narrative":
+            return "\n\nReply style: narrative — write with scene and atmosphere, "
+                + "weaving action and sensation through the dialogue; longer prose "
+                + "paragraphs are welcome."
+        default:
+            return "\n\nReply style: chat — conversational and spoken-feel. Keep it "
+                + "tight, dialogue first, minimal narration."
+        }
+    }
+    private var xaiKey: String? {
+        guard let key = Keychain.get(Keychain.xaiKeyAccount),
+              !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return key
+    }
+    /// Manual route pin: "auto" (ladder), "home" (Mac only), "away" (xAI only).
+    private var routeMode: String {
+        defaults.string(forKey: SettingsKeys.routeMode) ?? "auto"
+    }
+
+    // MARK: - Live Mika
+
+    /// Green-pill state: the bridge is reachable and configured.
+    @Published private(set) var mikaLiveArmed = false
+
+    private var mikaLiveEnabled: Bool { defaults.bool(forKey: "mikaLiveEnabled") }
+    private var mikaReplyBase: String? {
+        defaults.string(forKey: "mikaReplyBase")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var mikaWebhookURL: String? {
+        Keychain.get(Keychain.mikaWebhookURLAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var mikaWebhookKey: String? {
+        Keychain.get(Keychain.mikaWebhookKeyAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var hasLocalMikaCreds: Bool {
+        mikaWebhookURL?.isEmpty == false && mikaWebhookKey?.isEmpty == false
+    }
+
+    // MARK: - Link state
+
+    func refreshLink() async {
+        mode = .checking
+        var health: MacLink.MacHealth?
+        if routeMode != "away", let link = MacLink(urlString: macURLString) {
+            health = await link.health()
+        }
+        switch routeMode {
+        case "home":
+            mode = health != nil ? .home : .offline
+        case "away":
+            mode = xaiKey != nil ? .away : .offline
+        default:
+            if health != nil {
+                mode = .home
+            } else if xaiKey != nil {
+                mode = .away
+            } else {
+                mode = .offline
+            }
+        }
+        // Live Mika rides the Mac bridge (path A): armed when the Mac is
+        // reachable and either side holds the webhook credentials.
+        mikaLiveArmed = mode == .home && mikaLiveEnabled
+            && ((health?.mikaLive ?? false) || hasLocalMikaCreds)
+    }
+
+    // MARK: - Voice input
+
+    private var currentHearingTake: UUID?
+
+    /// A finished mic take: transcribe (Mac Whisper at home, on-device
+    /// Whisper away — never Apple Speech), then send like typed text.
+    /// Time-boxed so a hung transcription can never freeze the Talk loop.
+    func heard(_ fileURL: URL) {
+        guard !isHearing else { return }
+        isHearing = true
+        hearingStatus = "hearing you…"
+        let take = UUID()
+        currentHearingTake = take
+        Task {
+            try? await Task.sleep(for: .seconds(30))
+            if isHearing, currentHearingTake == take {
+                currentHearingTake = nil
+                isHearing = false
+                hearingStatus = nil
+                banner = "Transcription timed out — try again."
+            }
+        }
+        Task {
+            do {
+                let text = try await transcribe(fileURL)
+                guard currentHearingTake == take else {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return  // timed out; a late result must not become a message
+                }
+                currentHearingTake = nil
+                isHearing = false
+                hearingStatus = nil
+                if text.isEmpty {
+                    banner = "Didn't catch anything — try again."
+                } else if isLikelyEcho(text) {
+                    banner = "That was my own voice — ignored."
+                } else {
+                    send(text, spoken: true)
+                }
+            } catch {
+                guard currentHearingTake == take else {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                currentHearingTake = nil
+                isHearing = false
+                hearingStatus = nil
+                banner = "Couldn't transcribe — \(error.localizedDescription)"
+            }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
+    /// Ghost filter: a transcript that is mostly words from her last reply is
+    /// speaker bleed, not him.
+    private func isLikelyEcho(_ transcript: String) -> Bool {
+        guard let last = messages.last(where: { $0.role == .assistant && !$0.isError }) else {
+            return false
+        }
+        let words = transcript.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        guard words.count >= 5 else { return false }
+        let replyWords = Set(
+            last.text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        )
+        let hits = words.filter { replyWords.contains($0) }.count
+        return Double(hits) / Double(words.count) >= 0.8
+    }
+
+    private func transcribe(_ fileURL: URL) async throws -> String {
+        // On-device Whisper stays as the floor in every route — it's local,
+        // not an Away backend, and voice input should never go deaf.
+        if routeMode != "away", let link = MacLink(urlString: macURLString), await link.isAwake() {
+            mode = .home
+            do {
+                return try await link.transcribe(fileURL: fileURL)
+            } catch {
+                banner = "Mac whisper failed — using on-device. (\(error.localizedDescription))"
+            }
+        }
+        return try await LocalWhisper.shared.transcribe(fileURL) { [weak self] status in
+            Task { @MainActor [weak self] in
+                self?.hearingStatus = status
+            }
+        }
+    }
+
+    // MARK: - Sending
+
+    func send(_ raw: String, spoken: Bool = false) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isThinking else { return }
+        // Spoken turns always answer aloud; typed turns follow the setting.
+        let wantVoice = effectiveVoiceID != nil && (spoken || speakTypedReplies)
+        let history = recentTurns()
+        messages.append(ChatMessage(role: .user, text: text))
+        isThinking = true
+        Task {
+            await deliver(text, history: history, wantVoice: wantVoice)
+            isThinking = false
+            if wantVoice {
+                ensureReplyHasVoice()
+            }
+            persist()
+        }
+    }
+
+    /// Reliability net for typed chat: if the reply landed text-only because
+    /// TTS failed somewhere along the way, fetch one fresh take automatically.
+    private func ensureReplyHasVoice() {
+        guard effectiveVoiceID != nil,
+              let last = messages.last,
+              last.id != pendingVoiceID,  // chunked speech is already on its way
+              last.role == .assistant, !last.isError, !last.hasVoice,
+              !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        regenerateVoice(for: last)
+    }
+
+    private func recentTurns() -> [Turn] {
+        messages.suffix(24)
+            .filter { !$0.isError }
+            .map { Turn(role: $0.role.rawValue, content: $0.text) }
+    }
+
+    /// Once-per-transition note when we slide from Home to Away.
+    private var notedAwayFallback = false
+
+    /// Routing: "auto" prefers the Mac and falls back to the Away key;
+    /// "home" pins the Mac; "away" goes straight to xAI.
+    private func deliver(_ text: String, history: [Turn], wantVoice: Bool) async {
+        let route = routeMode
+
+        if route != "away" {
+            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+                mode = .home
+                notedAwayFallback = false
+                // Live Mika: her page, armed bridge → the bot answers, not
+                // the sheet. Falls back to the sheet persona on any failure.
+                if cast == .mika && mikaLiveEnabled {
+                    do {
+                        let reply = try await link.mikaLive(
+                            message: text,
+                            warmth: emotion.warmth,
+                            sadism: emotion.sadism,
+                            intensity: emotion.intensity,
+                            webhookURL: mikaWebhookURL,
+                            webhookKey: mikaWebhookKey,
+                            replyBase: mikaReplyBase
+                        )
+                        mikaLiveArmed = true
+                        appendReply(reply, audio: nil)
+                        return
+                    } catch VesperError.http(let code, let detail) where code == 503 || code == 404 {
+                        // Bridge unconfigured or older phone_api — sheet, quietly.
+                        mikaLiveArmed = false
+                        if code == 503 {
+                            banner = "Live Mika not armed — using her sheet. (\(detail.prefix(80)))"
+                        }
+                    } catch {
+                        banner = "Live Mika failed — using her sheet. (\(error.localizedDescription))"
+                    }
+                }
+                do {
+                    try await sendViaMac(link, text: text, history: history, wantVoice: wantVoice)
+                    return
+                } catch VesperError.http(let code, _) where code == 404 {
+                    do {
+                        try await sendViaMacLegacy(link, text: text, history: history, wantVoice: wantVoice)
+                        return
+                    } catch {
+                        banner = "Home leg failed — \(error.localizedDescription)"
+                    }
+                } catch {
+                    banner = "Home leg failed — \(error.localizedDescription)"
+                }
+                if route == "home" {
+                    appendQuiet(nil)
+                    return
+                }
+            } else if route == "home" {
+                mode = .offline
+                banner = "Mac unreachable — Home is pinned (Settings → Route)."
+                appendQuiet(nil)
+                return
+            }
+        }
+
+        if let key = xaiKey {
+            mode = .away
+            if route == "auto", !notedAwayFallback {
+                notedAwayFallback = true
+                banner = "Mac offline · using Away"
+            }
+            do {
+                try await sendViaXAI(key: key, text: text, history: history, wantVoice: wantVoice)
+                return
+            } catch {
+                banner = error.localizedDescription
+                appendQuiet(error)
+            }
+        } else {
+            mode = .offline
+            banner = route == "away"
+                ? "Away is pinned but no xAI key is saved (Settings → Away)."
+                : "Mac offline and no Away key in Settings — add an xAI key to keep chatting."
+            appendQuiet(nil)
+        }
+    }
+
+    /// Streaming home leg: tokens append live; voice starts on the first clip.
+    private func sendViaMac(
+        _ link: MacLink, text: String, history: [Turn], wantVoice: Bool
+    ) async throws {
+        let payload = macPayload(text: text, history: history, wantVoice: wantVoice)
+        var replyID: UUID?
+        var streamError: String?
+
+        try await link.chatStream(payload) { [weak self] event in
+            guard let self else { return }
+            switch event.type {
+            case "state":
+                if self.cast == .vesper, let state = event.state {
+                    self.emotion = state
+                }
+            case "delta":
+                guard let delta = event.text else { return }
+                if let id = replyID {
+                    self.mutateMessage(id) { $0.text += delta }
+                } else {
+                    var message = ChatMessage(role: .assistant, text: delta)
+                    message.isStreaming = true
+                    replyID = message.id
+                    self.messages.append(message)
+                    self.isThinking = false
+                }
+                self.bumpScroll()
+            case "audio":
+                guard let id = replyID,
+                      let b64 = event.audioB64,
+                      let clip = Data(base64Encoded: b64)
+                else { return }
+                self.mutateMessage(id) { message in
+                    var clips = message.audioClips ?? []
+                    clips.append(clip)
+                    message.audioClips = clips
+                    message.audioSeconds =
+                        (message.audioSeconds ?? 0) + (VoicePlayer.duration(of: clip) ?? 0)
+                }
+                self.voice.enqueue(clip, for: id)
+            case "done":
+                if let id = replyID {
+                    self.mutateMessage(id) {
+                        if let full = event.reply { $0.text = full }
+                        $0.isStreaming = false
+                    }
+                    self.scrollPulse += 1
+                }
+            case "error":
+                streamError = event.detail ?? "the stream broke"
+            default:
+                break
+            }
+        }
+
+        if let id = replyID {
+            mutateMessage(id) { $0.isStreaming = false }
+        } else {
+            throw VesperError.http(502, streamError ?? "empty reply from the model")
+        }
+        if let streamError {
+            banner = "The stream trailed off — \(streamError)"
+        }
+    }
+
+    /// Pre-streaming phone API (older Macs): one-shot reply + clip.
+    private func sendViaMacLegacy(
+        _ link: MacLink, text: String, history: [Turn], wantVoice: Bool
+    ) async throws {
+        let response = try await link.chat(
+            macPayload(text: text, history: history, wantVoice: wantVoice)
+        )
+        if cast == .vesper {
+            emotion = response.state
+        }
+        var audio: Data?
+        if let b64 = response.audioB64 {
+            audio = Data(base64Encoded: b64)
+        }
+        appendReply(response.reply, audio: audio)
+    }
+
+    private func sendViaXAI(
+        key: String, text: String, history: [Turn], wantVoice: Bool
+    ) async throws {
+        var system: String
+        if let override = cast.personaOverride {
+            system = override
+            if !cast.plain {
+                system += vibeLine(emotion)
+            }
+        } else {
+            // Vesper: same turn pipeline the Mac runs, mirrored on device.
+            emotion.blendIntensity(toward: intensityBias)
+            emotion.absorb(text, warmthBias: warmthBias, sadismBias: sadismBias)
+            system = Persona.systemPrompt(
+                state: emotion, userName: userName, notes: notes, intensityBias: intensityBias
+            )
+        }
+        system += styleRider
+        let xai = XAILink(apiKey: key, model: awayModel)
+        let reply = try await xai.chat(system: system, history: history, user: text)
+        // Text lands immediately; the voice arrives sentence-by-sentence
+        // instead of one mega-clip after everything is synthesized.
+        appendReply(reply, audio: nil)
+        if wantVoice, let voiceID = effectiveVoiceID, let id = messages.last?.id {
+            speakAwayChunks(reply, messageID: id, xai: xai, voiceID: voiceID)
+        }
+    }
+
+    /// A reply currently having its voice synthesized chunk-by-chunk.
+    private var pendingVoiceID: UUID?
+
+    /// Away-leg speech: first sentence alone (she starts talking fast), the
+    /// rest in ~180-char sentence groups, each enqueued as it lands.
+    private func speakAwayChunks(
+        _ text: String, messageID: UUID, xai: XAILink, voiceID: String
+    ) {
+        pendingVoiceID = messageID
+        Task {
+            for chunk in Self.speechChunks(text) {
+                guard let clip = try? await xai.speak(chunk, voice: voiceID) else { continue }
+                let seconds = VoicePlayer.duration(of: clip)
+                mutateMessage(messageID) { message in
+                    var clips = message.audioClips ?? []
+                    clips.append(clip)
+                    message.audioClips = clips
+                    message.audioSeconds = (message.audioSeconds ?? 0) + (seconds ?? 0)
+                }
+                voice.enqueue(clip, for: messageID)
+            }
+            pendingVoiceID = nil
+            persist()
+        }
+    }
+
+    static func speechChunks(_ text: String) -> [String] {
+        var sentences: [String] = []
+        let ns = text as NSString
+        let pattern = "[^.!?…]+[.!?…]+[\"')\\]]*\\s*|[^.!?…]+\\s*$"
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            regex.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                match, _, _ in
+                if let range = match?.range {
+                    let s = ns.substring(with: range)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !s.isEmpty { sentences.append(s) }
+                }
+            }
+        }
+        guard sentences.count > 1 else { return [text] }
+        var chunks = [sentences[0]]
+        var current = ""
+        for sentence in sentences.dropFirst() {
+            if current.isEmpty {
+                current = sentence
+            } else if current.count + sentence.count < 180 {
+                current += " " + sentence
+            } else {
+                chunks.append(current)
+                current = sentence
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
+    }
+
+    private func macPayload(
+        text: String, history: [Turn], wantVoice: Bool
+    ) -> MacChatRequest {
+        MacChatRequest(
+            message: text,
+            history: history,
+            state: emotion,
+            userName: userName,
+            notes: notes,
+            warmthBias: warmthBias,
+            sadismBias: sadismBias,
+            intensity: intensityBias,
+            wantAudio: wantVoice,
+            personaOverride: cast.personaOverride,
+            plain: cast.plain,
+            voice: effectiveVoiceID,
+            replyStyle: replyStyle,
+            ttsEngine: ttsEngine,
+            voiceIntensity: voiceIntensity,
+            voiceHeat: voiceHeat
+        )
+    }
+
+    private func mutateMessage(_ id: UUID, _ change: (inout ChatMessage) -> Void) {
+        guard let index = messages.lastIndex(where: { $0.id == id }) else { return }
+        var message = messages[index]
+        change(&message)
+        messages[index] = message
+    }
+
+    /// At most ~8 scroll commands a second while tokens stream.
+    private func bumpScroll() {
+        let now = Date()
+        if now.timeIntervalSince(lastScrollPulse) > 0.12 {
+            lastScrollPulse = now
+            scrollPulse += 1
+        }
+    }
+
+    private func appendReply(_ text: String, audio: Data?) {
+        var message = ChatMessage(role: .assistant, text: text, audio: audio)
+        if let audio {
+            message.audioSeconds = VoicePlayer.duration(of: audio)
+        }
+        messages.append(message)
+        if let audio {
+            voice.play(audio, id: message.id)
+        }
+    }
+
+    private func appendQuiet(_ error: Error?) {
+        var text = cast == .vesper
+            ? "*Vesper goes quiet for a moment.*"
+            : "No connection right now."
+        if let error {
+            text += "\n\n\(error.localizedDescription)"
+        }
+        messages.append(ChatMessage(role: .assistant, text: text, isError: true))
+    }
+
+    // MARK: - Mood editing (the sheet's live sliders)
+
+    private var emotionPersistTask: Task<Void, Never>?
+
+    /// Slider writes: immediate for her behavior, debounced for disk.
+    func updateEmotion(_ axis: WritableKeyPath<EmotionState, Double>, to value: Double) {
+        emotion[keyPath: axis] = min(1, max(0, value))
+        emotionPersistTask?.cancel()
+        emotionPersistTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.persist()
+        }
+    }
+
+    // MARK: - Voice regeneration
+
+    @Published private(set) var regeneratingID: UUID?
+
+    /// Fresh take: re-synthesize this reply's voice (Mac TTS at home, xAI
+    /// direct away), replace the cached clips atomically, and play it. The
+    /// old audio survives if synthesis fails.
+    func regenerateVoice(for message: ChatMessage) {
+        guard message.role == .assistant, !message.isError,
+              let voiceID = effectiveVoiceID, regeneratingID == nil
+        else { return }
+        regeneratingID = message.id
+        let text = message.text
+        Task {
+            var clip: Data?
+            if routeMode != "away",
+               let link = MacLink(urlString: macURLString), await link.isAwake() {
+                clip = try? await link.tts(
+                    text: text,
+                    voice: voiceID,
+                    engine: ttsEngine,
+                    intensity: voiceIntensity,
+                    heat: voiceHeat
+                )
+            }
+            if clip == nil, routeMode != "home", let key = xaiKey {
+                clip = try? await XAILink(apiKey: key, model: awayModel).speak(text, voice: voiceID)
+            }
+            if let clip {
+                let seconds = VoicePlayer.duration(of: clip)
+                mutateMessage(message.id) {
+                    $0.audio = nil
+                    $0.audioClips = [clip]
+                    $0.audioSeconds = seconds
+                }
+                voice.play(clip, id: message.id)
+                persist()
+            } else {
+                banner = "Couldn't regenerate the voice right now."
+            }
+            regeneratingID = nil
+        }
+    }
+
+    // MARK: - Background survival
+
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private var isBusy: Bool {
+        isThinking || isHearing || voice.isLive
+    }
+
+    /// Honest iOS lifecycle: with the `audio` background mode, Talk keeps the
+    /// app alive as long as the session is recording/playing. Without audio,
+    /// this grace task lets an in-flight turn (stream, transcription, TTS)
+    /// finish after a swipe-home; pure visual idle cannot run backgrounded —
+    /// the system suspends us, and the stage resumes cleanly on return.
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            beginGrace()
+        case .active:
+            endGrace()
+            Task { await refreshLink() }
+        default:
+            break
+        }
+    }
+
+    private func beginGrace() {
+        guard backgroundTask == .invalid, isBusy else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "vesper.finish-turn") {
+            [weak self] in
+            self?.endGrace()
+        }
+        Task { [weak self] in
+            // Release as soon as the turn lands — no busy loop, no battery tax.
+            while let self, self.backgroundTask != .invalid, self.isBusy {
+                try? await Task.sleep(for: .seconds(2))
+            }
+            self?.endGrace()
+        }
+    }
+
+    private func endGrace() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
+    // MARK: - Housekeeping
+
+    func resetSoul() {
+        voice.stop()
+        messages = []
+        emotion = EmotionState()
+        persist()
+    }
+
+    /// Encoding voice clips to JSON is heavy — never on the main actor.
+    private func persist() {
+        let snapshot = SoulSnapshot(emotion: emotion, messages: messages)
+        let member = cast
+        let threadID = currentThreadID
+        let title = threadTitle
+        // Optimistic index update so the menu reflects reality immediately.
+        var list = threads.filter { $0.id != threadID }
+        list.insert(ThreadMeta(id: threadID, title: title, updatedAt: Date()), at: 0)
+        threads = list
+        Task.detached(priority: .utility) {
+            SoulStore.save(snapshot, for: member, thread: threadID, title: title)
+        }
+    }
+}

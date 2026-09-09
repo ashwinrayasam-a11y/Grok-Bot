@@ -47,4 +47,43 @@ Open the local Gradio URL. Under **Model & keys** you can paste tokens without e
 - **What she calls you** + **Private notes** — relationship texture injected into the system prompt
 - **Export / Import** — save chat + emotional state as JSON
 
+## iPhone companion (hybrid)
+
+A SwiftUI app under `ios/Vesper` that talks to Vesper two ways:
+
+- **Home** — the phone talks to a small API on your Mac (`companion/phone_api.py`), which runs the same personality + emotional state as the Gradio app against local Gemma via Ollama, and speaks with Ara via the xAI TTS API. The xAI key stays on the Mac.
+- **Away** — if the Mac is unreachable, the app falls back to xAI Grok + Ara directly, using a key you paste into the app's settings (stored in the iOS Keychain, never in git). The same persona text and mood heuristics are mirrored on device, and the mood carries over between modes because the phone owns the state.
+
+### Run on the Mac
+
+```bash
+pip install -r requirements.txt
+pip install mlx-whisper                  # voice input (Apple Silicon only)
+brew install ffmpeg                      # mlx-whisper uses it to load audio
+ollama pull HammerAI/gemma-4-31b-heretic # local model
+mkdir -p .vesper
+echo 'xai-...' > .vesper/xai.key         # her voice; .vesper/ is gitignored
+python -m companion.phone_api            # binds 0.0.0.0:7861 on your LAN
+```
+
+This runs happily beside the Gradio app (`python app.py`) — different ports. Env knobs (all optional): `VESPER_PHONE_BACKEND` (`ollama` | `xai` | `hf` | `openai`), `VESPER_PHONE_MODEL`, `VESPER_OLLAMA_URL`, `VESPER_PHONE_HOST`, `VESPER_PHONE_PORT`, `VESPER_TTS_VOICE`, `VESPER_STT_MODEL`.
+
+Endpoints: `GET /v1/health`, `GET /v1/persona`, `POST /v1/chat/stream` (NDJSON: evolved state, live token deltas, Ara voice clips as sentences finish — her first sentence is speaking while the rest still generates), `POST /v1/chat` (one-shot fallback), `POST /v1/stt` (audio in → verbatim Whisper transcript out — no profanity filter), `POST /v1/tts`.
+
+### Open on the iPhone
+
+1. Open `ios/Vesper/Vesper.xcodeproj` in Xcode 16+, pick your signing team, run on your iPhone (same Wi-Fi as the Mac).
+2. In the app's settings, the Mac URL defaults to `http://Ashs-MacBook-Pro.local:7861` — find yours with `scutil --get LocalHostName` and tap **Knock** to test.
+3. Optionally paste an xAI key for Away mode. Grant microphone, speech, and local-network permissions when asked.
+
+**Rebuild & run:** open `ios/Vesper/Vesper.xcodeproj` (Xcode 26), pick a signing team, run on the phone. **Talk:** the mic in the header toggles hands-free — speak, pause ~1.5 s, she answers, the mic re-arms. The bubble button hides the chat panel for a full-screen stage. **Background:** start Talk and swipe home — the conversation keeps going (audio background mode holds the session). Without Talk, an in-flight reply gets a ~30 s grace to finish, then iOS suspends the app; the stage resumes cleanly on return (pure visual idle cannot run backgrounded — Apple doesn't allow it).
+
+**Live Mika:** her page can talk to the real Mika bot instead of her sheet. The phone relays turns through the Mac's `POST /v1/mika/live`, which posts `{turnId, text, replyUrl, warmth, sadism, intensity}` to the Mika App Chat Bridge webhook and long-polls the reply that comes home over the Tailscale Funnel (`.vesper/mika.reply.base`, listener on port `18765` — run by `phone_api` itself, so the Mac app doesn't need to be open). Configure with `.vesper/mika.webhook.url` + `mika.webhook.key` on the Mac (also searched in `~/Grok-Bot/.vesper` and `~/.vesper`), or paste them into the phone's Settings (Keychain). A green **Live** pill shows on Mika's page when armed; if the bridge is down she falls back to her sheet with a quiet note.
+
+The app reads like Grok/ChatGPT — near-black canvas, one thin floating header, a single pill composer — with a **cast of three, each with their own page**: **Vesper** (her night: ember-and-teal light, the full 3D presence, living mood), **Mika** (night-flight teal: bob-and-fringe presence with her own procedural idle — quicker drift, bigger sway, a wandering micro-beat — no video loops, `eve` voice), and **Chat** (a deliberately plain assistant canvas — no avatar, no voice, no theater). Switching crossfades between worlds. Spoken replies play themselves the moment they land; tap the small waveform chip to replay — no transport controls.
+
+**Voice input** is a tap-toggle: tap the mic to start listening, tap again to stop and send. The phone records raw audio and transcribes it with Whisper — the Mac's `mlx-whisper` at home, or on-device [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) (`base.en`, one-time model download on first use) when away. Apple's speech recognizer is not used anywhere, so transcripts are verbatim — swear words and all.
+
+**Her presence** — a 2D full-body cutout stage (the Mac Companion2DView look): a familiar still on the dark canvas with a soft fade and breath-scale only — no postcard wiggle, no video loops, no 3D meshes (the procedural RealityKit bust is removed). Drop transparent full-figure PNGs at `ios/Vesper/Vesper/Assets.xcassets/VesperCutout.imageset/vesper-cutout.png` (currently the locked face reference as a stopgap) and `.../MikaCutout.imageset/mika-cutout.png` (currently a quiet placeholder until the PNG lands). Her face actually acts: modeled eyeballs with real gaze, lids that hood and blink over them, arched brows that lift, knit, and flash, lip halves whose corners rise and curl (including a mood-gated sneer), and a jaw that follows Ara's live audio meter. Long dark straight hair — a scalp-hugging cap plus hanging lengths to mid-back — frames the face from beside and behind (never over it) and trails her head turns with lagged follow-through. Every channel is a continuous blend of eased drifts, irregular gesture envelopes, and damped springs, so she never parks on a pose; her mood (the same `EmotionState`) only biases these signals and tints the key light ember→rose. Tap her to pull down from bust to décolleté framing; the chevron tucks her away.
+
 
