@@ -51,6 +51,8 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.voiceIntensity: 0.5,
             SettingsKeys.voiceHeat: 0.5,
             SettingsKeys.routeMode: "auto",
+            "mikaLiveEnabled": true,
+            "mikaReplyBase": "https://ashs-macbook-pro.tail75e054.ts.net",
         ])
         if let raw = defaults.string(forKey: "castMember"),
            let saved = CastMember(rawValue: raw) {
@@ -221,21 +223,43 @@ final class ChatViewModel: ObservableObject {
         defaults.string(forKey: SettingsKeys.routeMode) ?? "auto"
     }
 
+    // MARK: - Live Mika
+
+    /// Green-pill state: the bridge is reachable and configured.
+    @Published private(set) var mikaLiveArmed = false
+
+    private var mikaLiveEnabled: Bool { defaults.bool(forKey: "mikaLiveEnabled") }
+    private var mikaReplyBase: String? {
+        defaults.string(forKey: "mikaReplyBase")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var mikaWebhookURL: String? {
+        Keychain.get(Keychain.mikaWebhookURLAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var mikaWebhookKey: String? {
+        Keychain.get(Keychain.mikaWebhookKeyAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var hasLocalMikaCreds: Bool {
+        mikaWebhookURL?.isEmpty == false && mikaWebhookKey?.isEmpty == false
+    }
+
     // MARK: - Link state
 
     func refreshLink() async {
         mode = .checking
+        var health: MacLink.MacHealth?
+        if routeMode != "away", let link = MacLink(urlString: macURLString) {
+            health = await link.health()
+        }
         switch routeMode {
         case "home":
-            if let link = MacLink(urlString: macURLString), await link.isAwake() {
-                mode = .home
-            } else {
-                mode = .offline
-            }
+            mode = health != nil ? .home : .offline
         case "away":
             mode = xaiKey != nil ? .away : .offline
         default:
-            if let link = MacLink(urlString: macURLString), await link.isAwake() {
+            if health != nil {
                 mode = .home
             } else if xaiKey != nil {
                 mode = .away
@@ -243,6 +267,10 @@ final class ChatViewModel: ObservableObject {
                 mode = .offline
             }
         }
+        // Live Mika rides the Mac bridge (path A): armed when the Mac is
+        // reachable and either side holds the webhook credentials.
+        mikaLiveArmed = mode == .home && mikaLiveEnabled
+            && ((health?.mikaLive ?? false) || hasLocalMikaCreds)
     }
 
     // MARK: - Voice input
@@ -383,6 +411,32 @@ final class ChatViewModel: ObservableObject {
             if let link = MacLink(urlString: macURLString), await link.isAwake() {
                 mode = .home
                 notedAwayFallback = false
+                // Live Mika: her page, armed bridge → the bot answers, not
+                // the sheet. Falls back to the sheet persona on any failure.
+                if cast == .mika && mikaLiveEnabled {
+                    do {
+                        let reply = try await link.mikaLive(
+                            message: text,
+                            warmth: emotion.warmth,
+                            sadism: emotion.sadism,
+                            intensity: emotion.intensity,
+                            webhookURL: mikaWebhookURL,
+                            webhookKey: mikaWebhookKey,
+                            replyBase: mikaReplyBase
+                        )
+                        mikaLiveArmed = true
+                        appendReply(reply, audio: nil)
+                        return
+                    } catch VesperError.http(let code, let detail) where code == 503 || code == 404 {
+                        // Bridge unconfigured or older phone_api — sheet, quietly.
+                        mikaLiveArmed = false
+                        if code == 503 {
+                            banner = "Live Mika not armed — using her sheet. (\(detail.prefix(80)))"
+                        }
+                    } catch {
+                        banner = "Live Mika failed — using her sheet. (\(error.localizedDescription))"
+                    }
+                }
                 do {
                     try await sendViaMac(link, text: text, history: history, wantVoice: wantVoice)
                     return

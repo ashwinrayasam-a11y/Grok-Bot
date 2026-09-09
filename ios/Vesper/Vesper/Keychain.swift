@@ -5,6 +5,8 @@ import Security
 enum Keychain {
     private static let service = "app.vesper.companion"
     static let xaiKeyAccount = "xai-api-key"
+    static let mikaWebhookURLAccount = "mika-webhook-url"
+    static let mikaWebhookKeyAccount = "mika-webhook-key"
 
     static func set(_ value: String, for account: String) {
         let query: [String: Any] = [

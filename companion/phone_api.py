@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from .emotion import EmotionalState, update_from_message
 from .llm import DEFAULT_HF_MODEL, history_to_messages, stream_chat
+from .mika_live import ensure_reply_listener, live_turn, resolve_reply_base, resolve_webhook
 from .personality import BASE_PERSONA, COMPANION_NAME, build_system_prompt
 from .voice import stt_available, transcribe_file
 
@@ -212,6 +213,7 @@ def health() -> dict[str, Any]:
         "tts": bool(_xai_key()),
         "voice": TTS_VOICE,
         "stt": stt_available(),
+        "mika_live": all(resolve_webhook()) and bool(resolve_reply_base()),
     }
 
 
@@ -417,6 +419,69 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             tts.shutdown(wait=False)
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+MIKA_REPLY_PORT = int(os.environ.get("VESPER_MIKA_REPLY_PORT", "18765"))
+
+
+class MikaLiveRequest(BaseModel):
+    message: str
+    warmth: float = 0.7
+    sadism: float = 0.1
+    intensity: float = 0.5
+    # Optional per-request credentials/config from the phone's Settings;
+    # falls back to the Mac's .vesper files / env when absent.
+    webhook_url: str | None = None
+    webhook_key: str | None = None
+    reply_base: str | None = None
+
+
+@app.post("/v1/mika/live")
+def mika_live(req: MikaLiveRequest) -> dict[str, str]:
+    """Live Mika: relay one turn through the Mika App Chat Bridge webhook and
+    long-poll for the bot's reply via the Tailscale Funnel listener."""
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is empty")
+
+    stored_url, stored_key = resolve_webhook()
+    webhook_url = (req.webhook_url or "").strip() or stored_url
+    webhook_key = (req.webhook_key or "").strip() or stored_key
+    if not webhook_url or not webhook_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Mika webhook not configured — paste it in the phone's Settings "
+            "or put .vesper/mika.webhook.url / mika.webhook.key on the Mac.",
+        )
+    reply_base = (req.reply_base or "").strip() or resolve_reply_base()
+    if not reply_base:
+        raise HTTPException(
+            status_code=503,
+            detail="No funnel reply base — set .vesper/mika.reply.base or VESPER_MIKA_REPLY_BASE.",
+        )
+    if not ensure_reply_listener(MIKA_REPLY_PORT):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Reply port {MIKA_REPLY_PORT} is busy — close the Mac app's live "
+            "listener or set VESPER_MIKA_REPLY_PORT (and repoint the funnel).",
+        )
+    try:
+        reply = live_turn(
+            webhook_url=webhook_url,
+            webhook_key=webhook_key,
+            text=message,
+            warmth=req.warmth,
+            sadism=req.sadism,
+            intensity=req.intensity,
+            reply_base=reply_base,
+        )
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Mika didn't reply in time.")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"webhook: {e}")
+    if not reply.strip():
+        raise HTTPException(status_code=502, detail="empty reply from the bridge")
+    return {"reply": reply}
 
 
 @app.post("/v1/stt")

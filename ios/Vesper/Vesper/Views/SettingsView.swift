@@ -20,7 +20,12 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.voiceHeat) private var voiceHeat = 0.5
     @AppStorage(SettingsKeys.routeMode) private var routeMode = "auto"
 
+    @AppStorage("mikaLiveEnabled") private var mikaLiveEnabled = true
+    @AppStorage("mikaReplyBase") private var mikaReplyBase = "https://ashs-macbook-pro.tail75e054.ts.net"
+
     @State private var xaiKey: String = Keychain.get(Keychain.xaiKeyAccount) ?? ""
+    @State private var mikaWebhookURL: String = Keychain.get(Keychain.mikaWebhookURLAccount) ?? ""
+    @State private var mikaWebhookKey: String = Keychain.get(Keychain.mikaWebhookKeyAccount) ?? ""
     @State private var knockResult: String?
     @State private var knocking = false
 
@@ -85,6 +90,53 @@ struct SettingsView: View {
                     Text("Away — Grok direct")
                 } footer: {
                     Text("Used only when her Mac is unreachable. The key lives in the iOS Keychain and never leaves this phone.")
+                }
+
+                Section {
+                    Toggle("Live Mika", isOn: $mikaLiveEnabled)
+                    TextField("Webhook URL", text: $mikaWebhookURL)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onChange(of: mikaWebhookURL) {
+                            Keychain.set(
+                                mikaWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                                for: Keychain.mikaWebhookURLAccount
+                            )
+                        }
+                    SecureField("Webhook key", text: $mikaWebhookKey)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onChange(of: mikaWebhookKey) {
+                            Keychain.set(
+                                mikaWebhookKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                                for: Keychain.mikaWebhookKeyAccount
+                            )
+                        }
+                    TextField("Reply base (Tailscale Funnel)", text: $mikaReplyBase)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(model.mikaLiveArmed ? "Armed" : "Sheet")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(model.mikaLiveArmed ? .green : VesperTheme.mute)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule().fill(
+                                    model.mikaLiveArmed
+                                        ? Color.green.opacity(0.15)
+                                        : Color.white.opacity(0.05)
+                                )
+                            )
+                    }
+                } header: {
+                    Text("Mika — live bridge")
+                } footer: {
+                    Text("Live turns relay through the Mac's phone API to the Mika App Chat Bridge; replies come home over the Tailscale Funnel. Credentials stay in the Keychain (or live in the Mac's .vesper files). When the bridge is down, Mika answers from her sheet.")
                 }
 
                 Section {

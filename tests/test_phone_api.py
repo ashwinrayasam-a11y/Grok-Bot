@@ -319,6 +319,73 @@ def test_voice_override_reaches_tts(monkeypatch):
     assert seen["voice"] == "eve"
 
 
+def test_mika_live_relay(monkeypatch):
+    captured = {}
+
+    def fake_turn(**kw):
+        captured.update(kw)
+        return "wheels up."
+
+    monkeypatch.setattr(phone_api, "resolve_webhook", lambda: ("https://wh", "sekret"))
+    monkeypatch.setattr(phone_api, "resolve_reply_base", lambda: "https://mac.tailnet.ts.net")
+    monkeypatch.setattr(phone_api, "ensure_reply_listener", lambda port: True)
+    monkeypatch.setattr(phone_api, "live_turn", fake_turn)
+
+    r = client.post(
+        "/v1/mika/live",
+        json={"message": "hey mika", "warmth": 0.9, "sadism": 0.2, "intensity": 0.6},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"reply": "wheels up."}
+    assert captured["webhook_url"] == "https://wh"
+    assert captured["reply_base"] == "https://mac.tailnet.ts.net"
+    assert captured["warmth"] == 0.9
+
+    # Phone-supplied credentials win over the Mac files.
+    client.post(
+        "/v1/mika/live",
+        json={"message": "hey", "webhook_url": "https://phone-wh", "webhook_key": "pk"},
+    )
+    assert captured["webhook_url"] == "https://phone-wh"
+    assert captured["webhook_key"] == "pk"
+
+
+def test_mika_live_unconfigured_is_503(monkeypatch):
+    monkeypatch.setattr(phone_api, "resolve_webhook", lambda: (None, None))
+    r = client.post("/v1/mika/live", json={"message": "hey"})
+    assert r.status_code == 503
+
+
+def test_mika_live_turn_roundtrip(monkeypatch):
+    import threading
+
+    from companion import mika_live
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        assert json["replyUrl"].endswith("/reply")
+        assert headers["X-Automation-Key"] == "k"
+        threading.Timer(0.05, lambda: mika_live.deliver(json["turnId"], "pong")).start()
+
+        class R:
+            def raise_for_status(self):
+                pass
+
+        return R()
+
+    monkeypatch.setattr(mika_live.httpx, "post", fake_post)
+    reply = mika_live.live_turn(
+        webhook_url="https://wh",
+        webhook_key="k",
+        text="hi",
+        warmth=0.5,
+        sadism=0.5,
+        intensity=0.5,
+        reply_base="https://base",
+        timeout=2,
+    )
+    assert reply == "pong"
+
+
 def test_voice_intensity_maps_to_tts_speed(monkeypatch):
     seen = {}
 

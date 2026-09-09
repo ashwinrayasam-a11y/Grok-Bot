@@ -89,16 +89,65 @@ struct MacLink {
         baseURL = url
     }
 
-    /// Quick knock on /v1/health — decides Home vs Away.
-    func isAwake() async -> Bool {
+    struct MacHealth: Decodable {
+        var ok: Bool
+        var mikaLive: Bool?
+    }
+
+    /// Quick knock on /v1/health — decides Home vs Away, reports live bridge.
+    func health() async -> MacHealth? {
         var request = URLRequest(url: baseURL.appending(path: "v1/health"))
         request.timeoutInterval = 2.5
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              body["ok"] as? Bool == true
-        else { return false }
-        return true
+              let body = try? snakeDecoder().decode(MacHealth.self, from: data),
+              body.ok
+        else { return nil }
+        return body
+    }
+
+    func isAwake() async -> Bool {
+        await health() != nil
+    }
+
+    /// One live Mika turn relayed through the Mac's bridge (long-poll).
+    func mikaLive(
+        message: String,
+        warmth: Double,
+        sadism: Double,
+        intensity: Double,
+        webhookURL: String?,
+        webhookKey: String?,
+        replyBase: String?
+    ) async throws -> String {
+        struct LiveRequest: Encodable {
+            var message: String
+            var warmth: Double
+            var sadism: Double
+            var intensity: Double
+            var webhookUrl: String?
+            var webhookKey: String?
+            var replyBase: String?
+        }
+        struct LiveResponse: Decodable {
+            var reply: String
+        }
+        var request = URLRequest(url: baseURL.appending(path: "v1/mika/live"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try snakeEncoder().encode(
+            LiveRequest(
+                message: message, warmth: warmth, sadism: sadism, intensity: intensity,
+                webhookUrl: webhookURL, webhookKey: webhookKey, replyBase: replyBase
+            )
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw VesperError.http(code, String(data: data, encoding: .utf8) ?? "")
+        }
+        return try snakeDecoder().decode(LiveResponse.self, from: data).reply
     }
 
     func chat(_ payload: MacChatRequest) async throws -> MacChatResponse {

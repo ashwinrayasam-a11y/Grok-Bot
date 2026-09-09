@@ -184,7 +184,19 @@ struct ChatView: View {
 
             Spacer()
 
-            // Offline is the only state worth a pixel of chrome.
+            // Live Mika: the green pill, same read as the Mac.
+            if model.cast == .mika && model.mikaLiveArmed {
+                Text("Live")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.green.opacity(0.14)))
+                    .overlay(Capsule().strokeBorder(Color.green.opacity(0.4), lineWidth: 1))
+                    .accessibilityLabel("Live Mika armed")
+            }
+
+            // Offline is the only other state worth a pixel of chrome.
             if model.mode == .offline {
                 Circle()
                     .fill(Color.gray)
