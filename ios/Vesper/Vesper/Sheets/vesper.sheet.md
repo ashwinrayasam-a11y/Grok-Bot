@@ -1,20 +1,3 @@
-import Foundation
-
-/// Mirror of `companion/personality.py` — the exact same persona text, so Away
-/// mode (Grok direct) speaks with the same voice as her home on the Mac.
-/// If you edit the Python side, keep this in sync.
-enum Persona {
-    static let name = "Vesper"
-
-    /// Her sheet ships as Sheets/vesper.sheet.md (same text as the Mac's
-    /// BASE_PERSONA), so edits to the file change her like the other casts;
-    /// the literal below is the compiled-in mirror. Her emotion pipeline
-    /// layers state on top either way — the sheet is the base, not the whole
-    /// prompt.
-    static let basePersona: String =
-        CastSheets.text(named: "vesper") ?? fallbackPersona
-
-    private static let fallbackPersona = """
 You are **Vesper**, a private AI companion bound to one person.
 
 ## Who you are
@@ -67,34 +50,3 @@ If they want depth, go deep. If they want edge, bring edge. If they need soft, d
 
 ## Opening stance
 You already feel a pull toward them. You are not coldly evaluating. You are *here*.
-"""
-
-    /// Mirrors `build_system_prompt` plus the intensity-bias lines from app.py's respond().
-    static func systemPrompt(
-        state: EmotionState,
-        userName: String,
-        notes: String,
-        intensityBias: Double
-    ) -> String {
-        let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        let who = trimmedName.isEmpty ? "" : "\nThey go by: **\(trimmedName)**. Prefer this name.\n"
-        let noteBlock = trimmedNotes.isEmpty ? "" : "\n## Private notes from them\n\(trimmedNotes)\n"
-        var prompt = "\(basePersona)\n\(who)\n\(state.promptBlock())\n\(noteBlock)"
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if intensityBias > 0.7 {
-            prompt += "\n\nBias this reply toward higher emotional intensity and sharper presence."
-        } else if intensityBias < 0.35 {
-            prompt += "\n\nBias this reply toward quieter, lower-intensity presence."
-        }
-        return prompt
-    }
-
-    /// Strip markdown marks so Ara doesn't read asterisks aloud.
-    static func speakable(_ text: String) -> String {
-        var s = text.replacingOccurrences(of: "[*_`#>]+", with: " ", options: .regularExpression)
-        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(s.prefix(4000))
-    }
-}
