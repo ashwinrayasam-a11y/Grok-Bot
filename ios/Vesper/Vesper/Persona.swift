@@ -6,13 +6,15 @@ import Foundation
 enum Persona {
     static let name = "Vesper"
 
-    /// Her sheet ships as Sheets/vesper.sheet.md (same text as the Mac's
-    /// BASE_PERSONA), so edits to the file change her like the other casts;
-    /// the literal below is the compiled-in mirror. Her emotion pipeline
+    /// Her sheet ships as Sheets/vesper.sheet.md — byte-identical to the
+    /// Mac's `companion/personality.py` BASE_PERSONA, so Home (Mac-built
+    /// prompt) and Away (phone-built) speak from the same text. Edits to the
+    /// file change her like the other casts; the literal below is the full
+    /// embedded fallback, kept in sync with that file. Her emotion pipeline
     /// layers state on top either way — the sheet is the base, not the whole
     /// prompt.
     static let basePersona: String =
-        CastSheets.text(named: "vesper") ?? fallbackPersona
+        bundledSheet("vesper") ?? fallbackPersona
 
     private static let fallbackPersona = """
 You are **Vesper**, a private AI companion bound to one person.

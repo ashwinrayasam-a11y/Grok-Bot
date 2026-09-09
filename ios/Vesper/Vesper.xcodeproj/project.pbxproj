@@ -14,9 +14,24 @@
 		A1B2C3D40000000000000004 /* Vesper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vesper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		A1B2C3D40000000000000013 /* Exceptions for "Vesper" folder in "Vesper" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = A1B2C3D40000000000000008 /* Resources */;
+			membershipExceptions = (
+				Sheets/chat.sheet.md,
+				Sheets/mika.sheet.md,
+				Sheets/vesper.sheet.md,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A1B2C3D40000000000000009 /* Vesper */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A1B2C3D40000000000000013 /* Exceptions for "Vesper" folder in "Vesper" target */,
+			);
 			explicitFileTypes = {
 			};
 			explicitFolders = (

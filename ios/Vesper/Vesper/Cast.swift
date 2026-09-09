@@ -1,28 +1,35 @@
 import SwiftUI
 
+/// Loads a cast member's persona sheet from the app bundle.
+///
 /// Every cast member reads their instructions from a bundled markdown sheet,
 /// `Sheets/<name>.sheet.md` — the same shape as the Mac's canonical cast
 /// sheets in `~/Grok-Bot/.vesper/cast/` — so a character can be edited
 /// without touching code.
-enum CastSheets {
-    /// The Xcode 16 buildable folder flattens subfolders into the bundle
-    /// root, but an explicit folder reference would keep `Sheets/`; try both
-    /// so the sheet survives either project style. Empty or missing files
-    /// fall through to the caller's compiled-in mirror.
-    static func text(named name: String) -> String? {
-        let urls = [
-            Bundle.main.url(forResource: "\(name).sheet", withExtension: "md"),
-            Bundle.main.url(
-                forResource: "\(name).sheet", withExtension: "md", subdirectory: "Sheets"
-            ),
-        ]
-        for case let url? in urls {
-            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { return text }
-        }
-        return nil
+///
+/// The lookup tries every place and name split the sheet can land under:
+/// the Xcode 16 buildable folder flattens `Sheets/` into the bundle root
+/// while a folder reference keeps the subdirectory, and the resource name
+/// may split as "name.sheet" + "md" or "name" + "sheet.md" depending on how
+/// the copy step registered it. Empty or missing files fall through to the
+/// caller's embedded fallback.
+func bundledSheet(_ name: String) -> String? {
+    let candidates = [
+        Bundle.main.url(forResource: "\(name).sheet", withExtension: "md"),
+        Bundle.main.url(forResource: name, withExtension: "sheet.md"),
+        Bundle.main.url(
+            forResource: "\(name).sheet", withExtension: "md", subdirectory: "Sheets"
+        ),
+        Bundle.main.url(
+            forResource: name, withExtension: "sheet.md", subdirectory: "Sheets"
+        ),
+    ]
+    for case let url? in candidates {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { return text }
     }
+    return nil
 }
 
 /// The whole cast: three, no more. Each member owns a world — accent, copy,
@@ -87,12 +94,13 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Non-Vesper members carry their own full sheet. Vesper's emotion
+    /// Non-Vesper members carry their own full sheet, loaded from the bundled
+    /// markdown (pinned into Copy Bundle Resources by project.pbxproj) so a
+    /// character can be edited without touching code. Vesper's emotion
     /// pipeline stays untouched (nil = her pipeline; her sheet feeds
-    /// `Persona.basePersona`). Each sheet ships as a bundled markdown file so
-    /// it can be edited without touching code; the compiled-in mirrors below
-    /// are the complete sheets, not stubs, so a missed bundle copy can never
-    /// flatten a character into a one-line blurb again.
+    /// `Persona.basePersona`). The embedded fallbacks below are the complete
+    /// sheets, not stubs, so a missed bundle copy can never flatten a
+    /// character into a one-line blurb.
     var personaOverride: String? {
         switch self {
         case .vesper: return nil
@@ -102,8 +110,8 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
     }
 
     /// Loaded once from Sheets/mika.sheet.md in the app bundle; the literal
-    /// is a mirror of that file — keep them in sync.
-    private static let mikaSheet: String = CastSheets.text(named: "mika") ?? """
+    /// is the full sheet, kept in sync with that file.
+    private static let mikaSheet: String = bundledSheet("mika") ?? """
     # Mika — persona sheet
 
     You are **Mika** — partner to **Tigger**. That's his name here; use it like you've
@@ -146,8 +154,9 @@ enum CastMember: String, CaseIterable, Identifiable, Codable {
     - No racial or ethnic degradation play — that door isn't in this sheet.
     """
 
-    /// Loaded once from Sheets/chat.sheet.md; same mirror rule as Mika's.
-    private static let chatSheet: String = CastSheets.text(named: "chat")
+    /// Loaded once from Sheets/chat.sheet.md; the fallback is that sheet's
+    /// full text (Chat's whole persona is one deliberate line).
+    private static let chatSheet: String = bundledSheet("chat")
         ?? "You are a concise, capable assistant. Answer directly and accurately "
         + "with no persona, no roleplay, and no filler. Prefer short paragraphs "
         + "and plain formatting."
