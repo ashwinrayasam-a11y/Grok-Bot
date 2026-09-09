@@ -1,0 +1,23 @@
+{
+  "name": "Vesper",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "ollama",
+      "command": "export OLLAMA_HOST=127.0.0.1:11434; exec ollama serve"
+    },
+    {
+      "name": "phone-api",
+      "command": "export PATH=\"$HOME/.local/bin:$PATH\"; until curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; do sleep 1; done; exec env VESPER_PHONE_MODEL=gemma3:1b python3 -m companion.phone_api"
+    },
+    {
+      "name": "gradio",
+      "command": "export PATH=\"$HOME/.local/bin:$PATH\"; until curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; do sleep 1; done; exec env OPENAI_API_KEY=ollama OPENAI_BASE_URL=http://127.0.0.1:11434/v1 GRADIO_SERVER_NAME=0.0.0.0 python3 app.py"
+    }
+  ],
+  "ports": [
+    { "name": "gradio", "port": 7860 },
+    { "name": "phone-api", "port": 7861 }
+  ]
+}
