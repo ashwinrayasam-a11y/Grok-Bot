@@ -51,7 +51,9 @@ final class ChatViewModel: ObservableObject {
             SettingsKeys.voiceIntensity: 0.5,
             SettingsKeys.voiceHeat: 0.5,
             SettingsKeys.routeMode: "auto",
-            "mikaLiveEnabled": true,
+            // Off by default: the Mac owns Live Mika. Two clients on the same
+            // webhook / reply port contend, so the phone ships with her sheet.
+            "mikaLiveEnabled": false,
             "mikaReplyBase": "https://ashs-macbook-pro.tail75e054.ts.net",
         ])
         if let raw = defaults.string(forKey: "castMember"),
