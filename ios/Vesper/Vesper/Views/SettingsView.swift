@@ -20,7 +20,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.voiceHeat) private var voiceHeat = 0.5
     @AppStorage(SettingsKeys.routeMode) private var routeMode = "auto"
 
-    @AppStorage("mikaLiveEnabled") private var mikaLiveEnabled = true
+    @AppStorage("mikaLiveEnabled") private var mikaLiveEnabled = false
     @AppStorage("mikaReplyBase") private var mikaReplyBase = "https://ashs-macbook-pro.tail75e054.ts.net"
 
     @State private var xaiKey: String = Keychain.get(Keychain.xaiKeyAccount) ?? ""
@@ -94,6 +94,9 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Live Mika", isOn: $mikaLiveEnabled)
+                    Text("Off by default — the Mac owns Live; the phone uses her sheet so they don't fight over the same bot.")
+                        .font(.footnote)
+                        .foregroundStyle(VesperTheme.mute)
                     TextField("Webhook URL", text: $mikaWebhookURL)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
